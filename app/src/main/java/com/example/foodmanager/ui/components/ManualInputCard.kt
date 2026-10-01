@@ -13,6 +13,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.relocation.BringIntoViewRequester
 import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -41,6 +43,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import com.example.foodmanager.core.DateUtils
@@ -88,6 +91,8 @@ fun ManualInputCard(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    /** 名称填完后把焦点送到数量框 */
+    val quantityFocus = remember { FocusRequester() }
     var dateTarget by remember { mutableStateOf<String?>(null) }
 
     // 数量输入框用独立文本状态维护：
@@ -167,6 +172,9 @@ fun ManualInputCard(
                 onValueChange = { v -> onChange(item.copy(name = v)) },
                 label = { Text("食物名称 *") },
                 singleLine = true,
+                // 填完名称按键盘「下一项」直接跳到数量，不用手点
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
+                keyboardActions = KeyboardActions(onAny = { quantityFocus.requestFocus() }),
                 modifier = Modifier
                     .fillMaxWidth()
                     .then(
@@ -199,6 +207,7 @@ fun ManualInputCard(
                     quantityText = cleaned
                     onChange(item.copy(quantity = cleaned.toDoubleOrNull() ?: 0.0))
                 },
+                quantityFocusRequester = quantityFocus,
                 unitOptions = Units.ALL,
                 unit = item.unit,
                 onUnitChange = { v -> onChange(item.copy(unit = v)) },

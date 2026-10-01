@@ -96,8 +96,10 @@ object Units {
 /**
  * 存放位置。
  *
- * **单一数据源**：位置的唯一来源是「设置 - 常用存放地点」（存于 `AppSettings.customLocations`）。
- * 这里只提供新装的默认值，不再维护第二份内置列表 —— 否则录入页下拉与设置页会不一致。
+ * **单一数据源**：位置的唯一来源是 `storage_locations` 表
+ * （用户在「设置 - 常用存放地点」里维护）。
+ * 这里只提供新安装时的默认值，不再维护第二份内置列表 ——
+ * 否则录入页下拉与设置页会不一致。
  */
 object Locations {
     /** 新安装时的默认常用位置（用户可在设置里增删） */
@@ -105,9 +107,11 @@ object Locations {
 
     /** 存放位置不设默认值：新建食物时留空，由用户自己选或填 */
     const val DEFAULT = ""
+}
 
-    /** 默认常用位置的存储形式（`|` 分隔） */
-    val DEFAULT_STORED = DEFAULTS.joinToString("|")
+/** 常用食品的新装默认值（空 = 由用户自己添加） */
+object CommonFoods {
+    val DEFAULTS: List<String> = emptyList()
 }
 
 /** 常用分类 */

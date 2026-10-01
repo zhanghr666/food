@@ -43,7 +43,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.foodmanager.core.DateUtils
 import com.example.foodmanager.ui.EditorViewModel
+import com.example.foodmanager.ui.LocationConfirmDialog
+import com.example.foodmanager.ui.ManualEntryState
+import com.example.foodmanager.ui.components.FoodDatePickerDialog
 import com.example.foodmanager.ui.components.ManualInputCard
 import com.example.foodmanager.ui.components.PhotoInputCard
 import com.example.foodmanager.ui.components.VoiceInputCard
@@ -61,6 +65,10 @@ fun EditorScreen(
     viewModel: EditorViewModel,
     customLocations: List<String> = emptyList(),
     customFoods: List<String> = emptyList(),
+    /** 位置别名 → 正式名（如「冷藏」→「冰箱」） */
+    locationAliases: Map<String, String> = emptyMap(),
+    /** 食品别名 → 正式名（如「樱桃」→「车厘子」） */
+    foodAliases: Map<String, String> = emptyMap(),
     onBack: () -> Unit,
     onSaved: (Long) -> Unit,
 ) {
@@ -73,23 +81,48 @@ fun EditorScreen(
     val item = viewModel.item
     val canSave = item.name.isNotBlank()
 
-    // 未填存放位置时的确认弹窗；两个保存入口（顶栏 ✓ / 表单按钮）共用同一套校验
-    var showLocationWarning by remember { mutableStateOf(false) }
-    // 表单内的状态提示（成功 / 被拦下）
-    var statusMessage by remember { mutableStateOf("") }
-    var statusIsError by remember { mutableStateOf(false) }
+    /**
+     * 手工表单的统一状态机（与「录入」页共用）。
+     *
+     * 编辑页的差异只在两点：
+     * - [ManualEntryState.confirmLocationWhenBlank] = true：位置为空时**弹窗问一句**
+     *   （录入页是直接拦下不落库）
+     * - 保存成功后由 [onSaved] 关页面（录入页是清空表单继续录入）
+     */
+    val form = remember {
+        ManualEntryState(initialItem = viewModel.item).apply {
+            confirmLocationWhenBlank = true
+        }
+    }
+    // 表单编辑直接写回 ViewModel 的当前条目
+    val statusMessage = form.status
+    val statusIsError = form.statusIsError
+
+    /** 拍照卡片里「手动选保质期」触发的日期选择 */
+    var datePickerTarget by remember { mutableStateOf<String?>(null) }
 
     val doSave: () -> Unit = {
-        statusMessage = ""
-        statusIsError = false
+        form.setStatus("")
         viewModel.save { id -> onSaved(id) }
     }
-    // 校验：位置为空先确认，避免"没填位置就存进去"（顶栏 ✓ 与表单按钮走同一路径）
+
+    /**
+     * 校验：位置为空先确认，避免"没填位置就存进去"。
+     * 顶栏 ✓ 与表单按钮走**同一路径**。
+     */
     val requestSave: () -> Unit = {
-        if (item.location.isBlank()) {
-            showLocationWarning = true
-        } else {
-            doSave()
+        when {
+            !form.canSaveWithoutAsking() -> {
+                if (form.confirmLocationWhenBlank) {
+                    form.requestLocationConfirm()
+                } else {
+                    form.setStatus(
+                        message = "还没有填写存放位置，填写后再保存（位置会用于快速查找）",
+                        isError = true,
+                    )
+                }
+            }
+            else -> doSave()
         }
     }
 
@@ -191,6 +224,8 @@ fun EditorScreen(
             if (mode == "photo") {
                 PhotoInputCard(
                     title = "拍照录入",
+                    // 编辑页没有"日期字段"入口，这里给一个直接选保质期的按钮
+                    onPickDate = { datePickerTarget = "expiry" },
                     onRecognized = { _, drafts ->
                         drafts.firstOrNull()?.let { mergeFromDraft(it) }
                         if (drafts.size > 1) {
@@ -210,7 +245,13 @@ fun EditorScreen(
                         "鸡蛋两盒放冰箱冷藏，三周后过期",
                     ),
                     onResult = { text ->
-                        VoiceTextParser.parse(text, customLocations = customLocations, customFoods = customFoods)
+                        VoiceTextParser.parse(
+                            text,
+                            customLocations = customLocations,
+                            customFoods = customFoods,
+                            locationAliases = locationAliases,
+                            foodAliases = foodAliases,
+                        )
                             ?.let { mergeFromDraft(it) }
                     },
                 )
@@ -218,9 +259,13 @@ fun EditorScreen(
             }
 
             // 手工录入：始终展示（拍照/语音识别结果也填进这张表）
+            // 表单内容以 ViewModel 为准，这里同步到 form 是为了让位置校验读到最新值
             ManualInputCard(
                 item = item,
-                onChange = { updated -> viewModel.update { updated } },
+                onChange = { updated ->
+                    viewModel.update { updated }
+                    form.update(updated)
+                },
                 onSave = requestSave,
                 customLocations = customLocations,
                 title = if (viewModel.isEditing) "食物信息" else "手工录入",
@@ -266,25 +311,25 @@ fun EditorScreen(
     }
 
     // 未填存放位置的确认：顶栏 ✓ 与表单按钮都走这里
-    if (showLocationWarning) {
-        AlertDialog(
-            onDismissRequest = { showLocationWarning = false },
-            icon = { Icon(Icons.Filled.Place, contentDescription = null) },
-            title = { Text("还没有填写存放位置") },
-            text = {
-                Text(
-                    "填写存放位置后，可以按位置快速查找食物，语音录入时也更容易自动识别。\n\n" +
-                        "现在「${item.name.ifBlank { "该食物" }}」的位置是空的，确定要这样保存吗？",
-                )
+    if (form.showingLocationConfirm) {
+        LocationConfirmDialog(
+            itemName = form.item.name,
+            onDismiss = { form.dismissLocationConfirm() },
+            onConfirm = {
+                form.dismissLocationConfirm()
+                doSave()
             },
-            confirmButton = {
-                TextButton(onClick = { showLocationWarning = false }) { Text("回去填写") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showLocationWarning = false
-                    doSave()
-                }) { Text("仍要保存") }
+        )
+    }
+
+    // 拍照卡片里「手动选保质期」的日期选择
+    datePickerTarget?.let {
+        FoodDatePickerDialog(
+            initialDate = item.expiryDate ?: DateUtils.today(),
+            onDismiss = { datePickerTarget = null },
+            onConfirm = { millis ->
+                viewModel.update { current -> current.copy(expiryDate = millis) }
+                datePickerTarget = null
             },
         )
     }

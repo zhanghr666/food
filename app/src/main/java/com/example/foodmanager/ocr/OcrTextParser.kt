@@ -107,7 +107,19 @@ object OcrTextParser {
 
     /** 需要忽略的商品信息行（注意：贮存条件里含有关键的存放位置信息，不要过滤） */
     private val NOISE_PATTERNS = listOf(
-        Regex("^净含量|^规格|^条形码|^执行标准|^产品标准|^配料|^营养成分|^食品添加剂|^生产许可|^SC\\d|^QS|^客服|^电话|^地址|^厂家|^制造商|^委托方|^保质期[:：]?\\s*$|^食用方法|^温馨提示|^图片仅供参考|^￥|^¥|^价格|^元/|^第\\d+页"),
+        Regex(
+            "^净含量|^规格|^条形码|^执行标准|^产品标准|^配料|^营养成分|^食品添加剂|^生产许可|" +
+                "^SC\\d|^QS|^客服|^电话|^地址|^厂家|^制造商|^委托方|^保质期[:：]?\\s*$|^食用方法|" +
+                "^￥|^¥|^价格|^元/|^第\\d+页",
+        ),
+        // 免责声明 / 广告语：整行都是套话，绝不能当成品名
+        // （实测「图案仅供参考,以实物为准」因中文字数多，打分反而高于真实品名而被误选）
+        Regex(
+            "仅供参考|以实物为准|图片与实物|图案与实物|实物为准|" +
+                "时尚生活|美味相伴|伴你左右|尽享美味|美好生活|" +
+                "本产品|最终解释权|请以实物|包装以实物|如有变更|恕不另行通知|" +
+                "合格品|检验合格|QS认证|ISO\\d|HACCP",
+        ),
         Regex("^[\\d\\s\\-/.]+$"),
         Regex("^[A-Za-z0-9\\s\\-_.:：/]{12,}$"),
     )
@@ -140,16 +152,24 @@ object OcrTextParser {
         return merged
     }
 
-    /** 解析整段文字，返回按录入顺序排列的草稿列表 */
+    /**
+     * 解析整段文字，返回按录入顺序排列的草稿列表。
+     *
+     * @param singleItemMode true = **整段文字当成一件商品**（默认，适合拍单件商品包装）；
+     *   false = 按行拆分成多条（适合拍购物小票批量录入）。
+     *   单件商品包装上的「脉动 / 减糖 / 蓝莓汁 1L」三行独立看都像商品名，
+     *   按行拆会被切碎成 3 条 —— 这是默认值取 true 的原因。
+     */
     fun parse(
         text: String,
         defaultSource: String = "ocr",
         extraKeywords: List<String> = emptyList(),
+        singleItemMode: Boolean = false,
     ): List<FoodDraft> {
         val previous = activeKeywords.get()
         activeKeywords.set(keywordMap(extraKeywords))
         return try {
-            val records = splitRecords(text)
+            val records = if (singleItemMode) listOf(text) else splitRecords(text)
             records.mapNotNull { parseRecord(it, defaultSource) }.filter { it.isUsable }
         } finally {
             activeKeywords.set(previous)
@@ -335,6 +355,9 @@ object OcrTextParser {
         if (line.contains(Regex("[年月日]|保质|生产|到期|有效期|净含量|克|毫升|kg|ml|g\\b"))) score -= 12
         if (chinese in 2..8) score += 12
         if (chinese > 12) score -= 8
+        // 命中已知食物关键词的行，几乎可以确定就是品名，给一个足够大的加权
+        // （否则「图案仅供参考,以实物为准」这种中文字多的套话会赢过真正的「奶油味夹心饼干」）
+        if (longestKeywordIn(line) != null) score += 40
         return score
     }
 

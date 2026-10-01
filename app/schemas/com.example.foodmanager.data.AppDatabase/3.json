@@ -2,7 +2,7 @@
   "formatVersion": 1,
   "database": {
     "version": 3,
-    "identityHash": "7cb3d2dc7f0699a852f19e3be57cbc1b",
+    "identityHash": "26b20250c601e9e57256e6a0025b6bd1",
     "entities": [
       {
         "tableName": "food_items",
@@ -100,7 +100,7 @@
       },
       {
         "tableName": "app_settings",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `warnDays` INTEGER NOT NULL DEFAULT 3, `notifyEnabled` INTEGER NOT NULL DEFAULT 1, `homeBannerEnabled` INTEGER NOT NULL DEFAULT 1, `notifyHour` INTEGER NOT NULL DEFAULT 9, `reuseLastLocation` INTEGER NOT NULL DEFAULT 1, `lastLocation` TEXT NOT NULL DEFAULT '', `lastUnit` TEXT NOT NULL DEFAULT '个', `customLocations` TEXT NOT NULL DEFAULT '', `customFoods` TEXT NOT NULL DEFAULT '', `lastEntryMode` TEXT NOT NULL DEFAULT 'manual', PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `warnDays` INTEGER NOT NULL DEFAULT 3, `notifyEnabled` INTEGER NOT NULL DEFAULT 1, `homeBannerEnabled` INTEGER NOT NULL DEFAULT 1, `notifyHour` INTEGER NOT NULL DEFAULT 9, `reuseLastLocation` INTEGER NOT NULL DEFAULT 1, `ocrSingleItem` INTEGER NOT NULL DEFAULT 1, `lastLocation` TEXT NOT NULL DEFAULT '', `lastUnit` TEXT NOT NULL DEFAULT '个', `customLocations` TEXT NOT NULL DEFAULT '', `customFoods` TEXT NOT NULL DEFAULT '', `lastEntryMode` TEXT NOT NULL DEFAULT 'manual', PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -139,6 +139,13 @@
           {
             "fieldPath": "reuseLastLocation",
             "columnName": "reuseLastLocation",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "1"
+          },
+          {
+            "fieldPath": "ocrSingleItem",
+            "columnName": "ocrSingleItem",
             "affinity": "INTEGER",
             "notNull": true,
             "defaultValue": "1"
@@ -189,7 +196,7 @@
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '7cb3d2dc7f0699a852f19e3be57cbc1b')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '26b20250c601e9e57256e6a0025b6bd1')"
     ]
   }
 }

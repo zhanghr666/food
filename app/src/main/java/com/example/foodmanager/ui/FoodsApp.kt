@@ -74,6 +74,9 @@ fun FoodsApp(
     var entryMode by rememberSaveable { mutableStateOf<String?>(null) }
     val effectiveEntryMode = entryMode ?: settings.lastEntryMode.ifBlank { "manual" }
     val customFoods by viewModel.customFoods.collectAsStateWithLifecycle()
+    val locationAliasMap by viewModel.locationAliasMap.collectAsStateWithLifecycle()
+    val foodAliasMap by viewModel.foodAliasMap.collectAsStateWithLifecycle()
+    val ocrSingleItem by viewModel.ocrSingleItem.collectAsStateWithLifecycle()
 
     // 「录入」页的界面状态放在这一层：切到其它标签页再回来，草稿与表单内容都不会丢
     val scanState = remember { ScanEntryState() }
@@ -145,6 +148,8 @@ fun FoodsApp(
                         viewModel = editorViewModel,
                         customLocations = customLocations,
                         customFoods = customFoods,
+                        locationAliases = locationAliasMap,
+                        foodAliases = foodAliasMap,
                         onBack = { fullScreen = null },
                         onSaved = {
                             ExpiryReminderWorker.runNow(context)
@@ -179,6 +184,9 @@ fun FoodsApp(
                         defaultUnit = settings.lastUnit.ifBlank { Units.DEFAULT },
                         customLocations = customLocations,
                         customFoods = customFoods,
+                        locationAliases = locationAliasMap,
+                        foodAliases = foodAliasMap,
+                        ocrSingleItem = ocrSingleItem,
                         entryMode = effectiveEntryMode,
                         onEntryModeChange = { mode ->
                             entryMode = mode
@@ -189,6 +197,7 @@ fun FoodsApp(
 
                     else -> SettingsScreen(
                         viewModel = viewModel,
+                        scanState = scanState,
                         onOpenArchived = { fullScreen = FullScreen.Archived },
                     )
                 }

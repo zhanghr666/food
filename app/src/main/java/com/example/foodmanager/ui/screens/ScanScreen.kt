@@ -44,6 +44,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -57,6 +58,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import com.example.foodmanager.core.CameraFiles
 import com.example.foodmanager.core.DateUtils
 import com.example.foodmanager.core.FoodDraft
 import com.example.foodmanager.data.Categories
@@ -72,6 +74,7 @@ import com.example.foodmanager.ui.components.PhotoInputCard
 import com.example.foodmanager.ui.components.VoiceInputCard
 import com.example.foodmanager.ui.components.initialQuantityText
 import com.example.foodmanager.voice.VoiceTextParser
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -87,6 +90,12 @@ fun ScanScreen(
     defaultUnit: String,
     customLocations: List<String> = emptyList(),
     customFoods: List<String> = emptyList(),
+    /** 位置别名 → 正式名（如「冷藏」→「冰箱」） */
+    locationAliases: Map<String, String> = emptyMap(),
+    /** 食品别名 → 正式名（如「樱桃」→「车厘子」） */
+    foodAliases: Map<String, String> = emptyMap(),
+    /** 拍照识别是否"一张照片只解析一条"（默认 true） */
+    ocrSingleItem: Boolean = true,
     /** 当前展开的方式：photo / voice / manual（由上层持有，便于首页快捷入口指定） */
     entryMode: String = "manual",
     onEntryModeChange: (String) -> Unit = {},
@@ -102,6 +111,7 @@ fun ScanScreen(
 
     // 键盘是否弹出：用于给滚动内容追加余量（见下面的 contentPadding）
     val imeVisible = WindowInsets.isImeVisible
+    val context = LocalContext.current
     // 保存后滚动回表单顶部用
     val listState = rememberLazyListState()
     val focusManager = LocalFocusManager.current
@@ -112,6 +122,10 @@ fun ScanScreen(
     var showRaw by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf("") }
 
+    // 进入录入页时兜底清理拍照残留（正常流程会在识别后立即删除）
+    LaunchedEffect(Unit) {
+        withContext(Dispatchers.IO) { CameraFiles.cleanUpStale(context) }
+    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("录入食物") }) },
@@ -174,8 +188,10 @@ fun ScanScreen(
                 item {
                     PhotoInputCard(
                         title = "拍照录入",
+                        singleItemMode = ocrSingleItem,
                         onRecognized = { text, parsed ->
                             state.rawText = text
+                            state.recordOcrResult(parsed.size, ocrSingleItem)
                             state.addDrafts(parsed)
                             statusText = if (parsed.isEmpty()) {
                                 "没有从图片里识别到食物信息，可换一张或手工录入"
@@ -198,7 +214,14 @@ fun ScanScreen(
                         ),
                         
                         onResult = { text ->
-                            val parsed = VoiceTextParser.parseBatch(text, "voice", customLocations, customFoods)
+                            val parsed = VoiceTextParser.parseBatch(
+                            text,
+                            "voice",
+                            customLocations,
+                            customFoods,
+                            locationAliases,
+                            foodAliases,
+                        )
                             if (parsed.isEmpty()) {
                                 // 解析失败：提供「改用手工补填」，把原话带进名称框
                                 state.prefillName(text, defaultUnit)
@@ -220,21 +243,24 @@ fun ScanScreen(
             // 手工录入：默认展开，与拍照/语音卡片同款样式
             if (manualExpanded) {
                 item {
+                    // 手工录入流程与编辑页共用 ManualEntryState（见 ManualEntryState.kt）
+                    val form = state.manual
                     ManualInputCard(
-                        item = state.manualDraft,
-                        onChange = { state.manualDraft = it },
+                        item = form.item,
+                        onChange = { form.update(it) },
                         onSave = {
-                            val toSave = state.manualDraft
+                            val toSave = form.item
                             if (toSave.location.isBlank()) {
                                 // 位置未填：拦下并给出提醒（不落库）
-                                state.manualStatusIsError = true
-                                state.manualStatus = "还没有填写存放位置，填写后再保存（位置会用于快速查找）"
+                                form.setStatus(
+                                    message = "还没有填写存放位置，填写后再保存（位置会用于快速查找）",
+                                    isError = true,
+                                )
                                 scope.launch { listState.animateScrollToItem(0) }
                                 return@ManualInputCard
                             }
                             onAddItems(listOf(toSave)) { count ->
-                                state.manualStatusIsError = false
-                                state.manualStatus = "已入库 $count 条：「${toSave.name}」"
+                                form.setStatus("已入库 $count 条：「${toSave.name}」")
                             }
                             // ---------- 保存后的交互顺序 ----------
                             // 1) 先收起键盘与焦点，避免残留的聚焦状态让下拉/菜单重新弹开
@@ -242,8 +268,7 @@ fun ScanScreen(
                             focusManager.clearFocus(force = true)
                             // 2) 再清空表单；resetToken 变化会强制关闭所有已展开的下拉
                             state.resetManual(defaultUnit)
-                            state.manualStatusIsError = false
-                            state.manualStatus = "已保存「${toSave.name}」，可以继续录入下一条"
+                            form.setStatus("已保存「${toSave.name}」，可以继续录入下一条")
                             // 3) 滚动回表单顶部，让用户看到提示 + 名称框
                             scope.launch { listState.animateScrollToItem(0) }
                         },
@@ -462,13 +487,21 @@ private fun DraftCard(
 
             Text(
                 text = buildString {
-                    append("到期：").append(DateUtils.format(draft.expiryDate))
+                    // 没有保质期时不显示「到期：—」这种占位，改为直接说明
+                    if (draft.expiryDate == null) {
+                        append(DateUtils.describeRemaining(null))
+                    } else {
+                        append("到期：").append(DateUtils.format(draft.expiryDate))
+                        append("　剩余：").append(
+                            DateUtils.describeRemaining(
+                                DateUtils.daysBetween(DateUtils.today(), draft.expiryDate),
+                            ),
+                        )
+                    }
                     if (draft.productionDate != null) {
                         append("　生产：").append(DateUtils.format(draft.productionDate))
                     }
-                    append("　剩余：").append(DateUtils.describeRemaining(
-                        draft.expiryDate?.let { DateUtils.daysBetween(DateUtils.today(), it) }
-                    ))
+                    if (draft.location.isNotBlank()) append("　位置：").append(draft.location)
                 },
                 style = MaterialTheme.typography.bodyMedium,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -541,7 +574,7 @@ private fun DraftCard(
                 Spacer(Modifier.height(6.dp))
                 DateFieldRow(
                     label = "保质期至",
-                    value = DateUtils.format(draft.expiryDate),
+                    value = draft.expiryDate?.let { DateUtils.format(it) } ?: "点这里设置",
                     onPick = { dateTarget = "expiry" },
                     onClear = { onUpdate(draft.copy(expiryDate = null)) },
                 )

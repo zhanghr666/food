@@ -6,14 +6,21 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 
 @Database(
-    entities = [FoodItem::class, AppSettings::class],
-    version = 3,
+    entities = [
+        FoodItem::class,
+        AppSettings::class,
+        StorageLocation::class,
+        CommonFood::class,
+    ],
+    version = 8,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun foodDao(): FoodDao
     abstract fun settingsDao(): SettingsDao
+    abstract fun storageLocationDao(): StorageLocationDao
+    abstract fun commonFoodDao(): CommonFoodDao
 
     companion object {
         private const val DB_NAME = "food_manager.db"

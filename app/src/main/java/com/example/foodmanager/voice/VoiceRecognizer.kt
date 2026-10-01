@@ -92,6 +92,15 @@ class VoiceRecognizer(private val context: Context) {
     @Volatile
     private var grammarJson: String? = null
 
+    /**
+     * 生成 [grammarJson] 时所用的词表指纹。
+     *
+     * 用户在设置里增删位置/食品、或改了别名后，指纹变化 → 下次识别前**重建词表**，
+     * 否则新加的常用食品要等重启 App 才生效。
+     */
+    @Volatile
+    private var grammarSignature: String? = null
+
     @Volatile
     private var grammarWordCount: Int = 0
 
@@ -297,6 +306,26 @@ class VoiceRecognizer(private val context: Context) {
         kotlinx.coroutines.runBlocking { database.settingsDao().get() }
     }.getOrNull() ?: com.example.foodmanager.data.AppSettings.DEFAULT
 
+    /**
+     * 读取参与语音词表的位置与食品（**含别名**）。
+     *
+     * 别名也要进词表，否则用户说「冷藏」时 Vosk 根本不会把它识别出来，
+     * 后面的"别名→正式名"映射也就无从生效。
+     */
+    private fun readGrammarWords(): GrammarWords = runCatching {
+        val database = AppDatabase.get(context)
+        kotlinx.coroutines.runBlocking {
+            val locations = database.storageLocationDao().getAll()
+            val foods = database.commonFoodDao().getAll()
+            GrammarWords(
+                locations = locations.flatMap { listOf(it.name) + it.aliasList },
+                foods = foods.flatMap { listOf(it.name) + it.aliasList },
+            )
+        }
+    }.getOrElse { GrammarWords(emptyList(), emptyList()) }
+
+    private data class GrammarWords(val locations: List<String>, val foods: List<String>)
+
     private fun extractText(json: String?, key: String): String {
         if (json.isNullOrBlank()) return ""
         return runCatching { JSONObject(json).optString(key, "").trim() }.getOrDefault("")
@@ -308,6 +337,14 @@ class VoiceRecognizer(private val context: Context) {
      * 注意：不用 Vosk 的 StorageService.unpack()，因为它会去读模型根目录的 `uuid` 文件
      * 做版本校验，而官方中文模型并没有这个文件，会直接抛 FileNotFoundException。
      * 这里自己递归拷贝，并用一个标记文件判断是否已完成。
+     *
+     * **两处刻意设计**：
+     * ① 解包到 `noBackupFilesDir` 而不是 `filesDir` —— 模型有 65MB，
+     *    而 Android 自动备份的每应用配额只有 25MB，放在 `filesDir` 会让**整包备份失败**
+     *    （用户换机后数据全丢，且不会有任何提示）。`noBackupFilesDir` 天然排除在备份之外，
+     *    且它是可随时从 assets 重新生成的，正该如此。
+     * ② 先解包到临时目录、成功后再整体改名 —— 避免中途被杀（切后台/低内存）
+     *    留下**残缺模型**，下次启动照样加载失败。
      */
     private suspend fun ensureModel(): Model? {
         model?.let { return it }
@@ -320,27 +357,50 @@ class VoiceRecognizer(private val context: Context) {
         }
         return try {
             LibVosk.setLogLevel(LogLevel.WARNINGS)
-            val dir = File(context.filesDir, MODEL_DIR)
-            val marker = File(dir, ".unpack_complete")
+            val dir = File(context.noBackupFilesDir, MODEL_DIR)
+            val marker = File(dir, UNPACK_MARKER)
             if (!marker.exists()) {
                 Log.i(TAG, "首次使用，从 assets 解包离线模型（约 65MB）…")
                 withContext(Dispatchers.IO) {
+                    val staging = File(context.noBackupFilesDir, "$MODEL_DIR.tmp")
+                    staging.deleteRecursively()
+                    staging.mkdirs()
+                    copyAssetDir(MODEL_ASSET, staging)
+                    File(staging, UNPACK_MARKER).writeText("ok")
+                    // 原子替换：先移走旧目录，再把完整的新目录改名到位
                     dir.deleteRecursively()
-                    dir.mkdirs()
-                    copyAssetDir(MODEL_ASSET, dir)
-                    marker.writeText("ok")
+                    if (!staging.renameTo(dir)) {
+                        // 极少数情况下 rename 失败（跨挂载点），退化为拷贝
+                        copyAssetDir(MODEL_ASSET, dir.apply { mkdirs() })
+                        File(dir, UNPACK_MARKER).writeText("ok")
+                        staging.deleteRecursively()
+                    }
                 }
                 Log.i(TAG, "模型解包完成")
             }
             model = withContext(Dispatchers.IO) { Model(dir.absolutePath) }
-            // 生成语法词表（只做一次），把用户自定义位置与常用食品也纳入
-            if (grammarJson == null) {
-                val userSettings = readSettings()
+            // 迁移清理：老版本把模型解包在 filesDir（会被自动备份统计，撑爆 25MB 配额）。
+            // 新模型**已就绪**后才删旧目录，避免出现"两个都没有"的空窗。
+            if (model != null) {
+                withContext(Dispatchers.IO) {
+                    val legacy = File(context.filesDir, MODEL_DIR)
+                    if (legacy.exists() && legacy.deleteRecursively()) {
+                        Log.i(TAG, "已清理旧位置的模型目录（移出备份范围）")
+                    }
+                }
+            }
+            // 生成语法词表：把用户维护的常用位置/食品（含别名）纳入
+            // 指纹变化时重建 —— 这样在设置里改了别名，下一次说话就生效，不必重启
+            val wordSource = readGrammarWords()
+            val signature = wordSource.locations.joinToString("|") +
+                "#" + wordSource.foods.joinToString("|")
+            if (grammarJson == null || grammarSignature != signature) {
                 runCatching {
-                    VoiceGrammar.build(userSettings.customLocationList, userSettings.customFoodList)
+                    VoiceGrammar.build(wordSource.locations, wordSource.foods)
                 }
                     .onSuccess {
                         grammarJson = it
+                        grammarSignature = signature
                         grammarWordCount = it.count { c -> c == ',' } + 1
                         Log.i(TAG, "领域语法词表生成完成，共 $grammarWordCount 个词条")
                     }
@@ -378,6 +438,9 @@ class VoiceRecognizer(private val context: Context) {
         const val TAG = "VoiceRecognizer"
         const val MODEL_ASSET = "model-cn"
         const val MODEL_DIR = "vosk-model-cn"
+
+        /** 解包完成标记：存在才认为目录里的模型是完整的 */
+        private const val UNPACK_MARKER = ".unpack_complete"
         const val SAMPLE_RATE = 16000f
     }
 }

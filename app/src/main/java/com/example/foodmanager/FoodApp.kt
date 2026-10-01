@@ -20,7 +20,13 @@ class FoodApp : Application() {
     val database: AppDatabase by lazy { AppDatabase.get(this) }
 
     val repository: FoodRepository by lazy {
-        FoodRepository(database.foodDao(), database.settingsDao(), applicationContext)
+        FoodRepository(
+            foodDao = database.foodDao(),
+            settingsDao = database.settingsDao(),
+            storageLocationDao = database.storageLocationDao(),
+            commonFoodDao = database.commonFoodDao(),
+            appContext = applicationContext,
+        )
     }
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)

@@ -153,7 +153,7 @@ fun InventoryScreen(
                 EmptyState(
                     title = if (query.isBlank() && locationFilter.isBlank()) "库存是空的" else "没有找到匹配的食物",
                     description = if (query.isBlank() && locationFilter.isBlank()) {
-                        "点击右下角「添加食物」手动录入，或用「智能录入」拍照/语音批量添加"
+                        "点击右下角「添加食物」逐项录入，或切到底部「录入」标签拍照/语音批量添加"
                     } else {
                         "试试换个关键词，或清除位置筛选"
                     },

@@ -53,6 +53,10 @@ interface FoodDao {
     @Query("SELECT COUNT(*) FROM food_items WHERE archived = 0")
     fun observeActiveCount(): Flow<Int>
 
+    /** 全部记录数（含已归档）：用于判断"用户是否已经用过这个 App" */
+    @Query("SELECT COUNT(*) FROM food_items")
+    suspend fun countAll(): Int
+
     @Query("SELECT DISTINCT location FROM food_items WHERE archived = 0 AND location != '' ORDER BY location")
     fun observeLocations(): Flow<List<String>>
 
@@ -101,43 +105,31 @@ data class AppSettings(
     /** 每天提醒的时间（小时，0-23） */
     @ColumnInfo(defaultValue = "9") val notifyHour: Int = 9,
 
-    /** 语音/OCR 录入后自动使用最近一次的存放位置 */
-    @ColumnInfo(defaultValue = "1") val reuseLastLocation: Boolean = true,
+    /**
+     * 拍照识别时，**一张照片默认只解析出一条记录**。
+     *
+     * 默认为 true：单件商品的包装文案（如「脉动 / 减糖 / 蓝莓汁 1L」）按行拆分会被切碎成多条。
+     * 关闭后按"一行一件商品"处理，适合拍购物小票批量录入。
+     */
+    @ColumnInfo(defaultValue = "1") val ocrSingleItem: Boolean = true,
 
-    /** 最近一次使用的存放位置 */
+    /** 最近一次使用的存放位置（只作为记忆展示，不会自动套用到新录入上） */
     @ColumnInfo(defaultValue = "") val lastLocation: String = "",
 
     /** 最近一次使用的单位 */
     @ColumnInfo(defaultValue = "个") val lastUnit: String = "个",
 
-    /**
-     * 常用存放位置，用 `|` 分隔（例如「厨房|冰箱|客厅储藏室|储物柜|茶几」）。
-     *
-     * **这是位置列表的唯一来源**：录入页/编辑页的下拉、语音识别的位置词表都用它。
-     *
-     * 注意：列默认值保持空串 —— 改列默认值等于改 schema（会影响 Room 的身份校验），
-     * 默认位置由 [AppSettings] 的 Kotlin 默认值与
-     * [FoodRepository.loadSettings] 的兜底逻辑提供。
-     */
-    @ColumnInfo(defaultValue = "") val customLocations: String = "",
-
-    /**
-     * 用户自定义的常用食品，用 `|` 分隔（例如「西兰花|车厘子|螺蛳粉」）。
-     * 这些食品会：① 出现在语音语法词表与同音字校正词表；② 供 OCR 名称识别优先匹配。
-     */
-    @ColumnInfo(defaultValue = "") val customFoods: String = "",
-
     /** 上次在「录入」页选择的方式：photo / voice / manual */
     @ColumnInfo(defaultValue = "manual") val lastEntryMode: String = "manual",
+
+    /**
+     * 常用位置表是否已经初始化过（v7→v8 拆表时置为 1）。
+     *
+     * 用途：区分"从没初始化过"和"用户主动把位置删光了"。
+     * 只有前者才补种默认位置，否则用户删空后重启又被塞回来。
+     */
+    @ColumnInfo(defaultValue = "0") val locationsInitialized: Boolean = false,
 ) {
-    /** 自定义位置列表 */
-    val customLocationList: List<String>
-        get() = customLocations.split('|').map { it.trim() }.filter { it.isNotBlank() }
-
-    /** 自定义常用食品列表 */
-    val customFoodList: List<String>
-        get() = customFoods.split('|').map { it.trim() }.filter { it.isNotBlank() }
-
     companion object {
         val DEFAULT = AppSettings()
     }
@@ -154,4 +146,64 @@ interface SettingsDao {
 
     @Upsert
     suspend fun upsert(settings: AppSettings)
+}
+
+/** 常用存放位置（独立表）的读写 */
+@Dao
+interface StorageLocationDao {
+
+    /** 按排序权重、其次按创建顺序返回；下拉列表与设置页共用 */
+    @Query("SELECT * FROM storage_locations ORDER BY sortOrder ASC, id ASC")
+    fun observeAll(): Flow<List<StorageLocation>>
+
+    @Query("SELECT * FROM storage_locations ORDER BY sortOrder ASC, id ASC")
+    suspend fun getAll(): List<StorageLocation>
+
+    @Query("SELECT COUNT(*) FROM storage_locations")
+    suspend fun count(): Int
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(item: StorageLocation): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAllIgnore(items: List<StorageLocation>): List<Long>
+
+    @Query("UPDATE storage_locations SET alias = :alias WHERE id = :id")
+    suspend fun updateAlias(id: Long, alias: String)
+
+    @Query("DELETE FROM storage_locations WHERE name = :name")
+    suspend fun deleteByName(name: String)
+
+    @Query("DELETE FROM storage_locations WHERE id = :id")
+    suspend fun deleteById(id: Long)
+
+    /** 有多少条**在库**记录正在使用这个位置（用于删除前提示） */
+    @Query("SELECT COUNT(*) FROM food_items WHERE location = :name")
+    suspend fun usageCount(name: String): Int
+}
+
+/** 常用食品（独立表）的读写 */
+@Dao
+interface CommonFoodDao {
+
+    @Query("SELECT * FROM common_foods ORDER BY sortOrder ASC, id ASC")
+    fun observeAll(): Flow<List<CommonFood>>
+
+    @Query("SELECT * FROM common_foods ORDER BY sortOrder ASC, id ASC")
+    suspend fun getAll(): List<CommonFood>
+
+    @Query("SELECT COUNT(*) FROM common_foods")
+    suspend fun count(): Int
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertIgnore(item: CommonFood): Long
+
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertAllIgnore(items: List<CommonFood>): List<Long>
+
+    @Query("UPDATE common_foods SET alias = :alias WHERE id = :id")
+    suspend fun updateAlias(id: Long, alias: String)
+
+    @Query("DELETE FROM common_foods WHERE id = :id")
+    suspend fun deleteById(id: Long)
 }

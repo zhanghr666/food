@@ -250,7 +250,7 @@ fun HomeScreen(
                 item {
                     EmptyState(
                         title = "还没有记录任何食物",
-                        description = "用「拍照/OCR」一次录入多条，或者用语音说一句就完成录入",
+                        description = "用上面三个入口之一开始：拍照识别包装、按住说话，或逐项填写",
                     )
                 }
             }

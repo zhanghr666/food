@@ -119,6 +119,77 @@ class FoodParserTest {
         assertEquals("蔬菜", drafts[2].category)
     }
 
+    // ---------------- 单件商品 vs 小票批量 ----------------
+
+    /**
+     * 回归：单件商品的包装文案按行拆会被切碎。
+     * 实测截图里「脉动 / 减糖 / 蓝莓汁 1L 1瓶」被拆成了 3 条（减糖 / 蓝莓汁 / 治量）。
+     */
+    @Test
+    fun ocrSingleItemModeKeepsOneRecordForPackagingText() {
+        val text = """
+            脉动
+            减糖
+            蓝莓汁 1L
+            1瓶
+        """.trimIndent()
+
+        val single = OcrTextParser.parse(text, "ocr", singleItemMode = true)
+        assertEquals("一张照片应只解析出一条记录", 1, single.size)
+
+        // 同一段文字在"小票批量"模式下仍按行拆分（保持原有能力）
+        val batch = OcrTextParser.parse(text, "ocr", singleItemMode = false)
+        assertTrue("批量模式应能拆出多条", batch.size >= 2)
+    }
+
+    @Test
+    fun ocrSingleItemModeStillWorksForRealLabel() {
+        val text = """
+            全脂纯牛奶
+            净含量 250mL
+            生产日期 2026-01-05
+            保质期至 2026-07-05
+        """.trimIndent()
+
+        val drafts = OcrTextParser.parse(text, "ocr", singleItemMode = true)
+        assertEquals(1, drafts.size)
+        assertEquals(DateUtils.of(2026, 7, 5), drafts.first().expiryDate)
+    }
+
+    /**
+     * 回归：免责声明/广告语被误当成品名。
+     *
+     * 实测截图（马卡龙夹心饼干）里，真正品名是「奶油味夹心饼干」，
+     * 却选中了「图案仅供参考,以实物为准」—— 因为它中文字多、打分反而更高。
+     */
+    @Test
+    fun ocrPrefersRealProductNameOverDisclaimer() {
+        val text = """
+            OCOCO
+            Macacon
+            Macaon Havoved Creamy
+            马卡龙风味
+            奶油味夹心饼干
+            flavored sandwich
+            cookies
+            时尚生活伴随着美味
+            FASHION LIFE ACCOMPANIED BY DELICIOUS
+            图案仅供参考,以实物为准
+            净含量:50克
+        """.trimIndent()
+
+        val drafts = OcrTextParser.parse(text, "ocr", singleItemMode = true)
+        assertEquals(1, drafts.size)
+        val name = drafts.first().name
+        assertTrue(
+            "品名不应是免责声明，实际得到：$name",
+            !name.contains("仅供参考") && !name.contains("实物") && !name.contains("时尚生活"),
+        )
+        assertTrue("品名应命中真实商品（饼干），实际得到：$name", name.contains("饼干"))
+        assertEquals(50.0, drafts.first().quantity, 0.001)
+        assertEquals("克", drafts.first().unit)
+    }
+
     // ---------------- 语音解析 ----------------
 
     @Test

@@ -75,6 +75,10 @@ object VoiceTextParser {
         defaultSource: String = "voice",
         customLocations: List<String> = emptyList(),
         customFoods: List<String> = emptyList(),
+        /** 位置别名 → 正式名（例如「冷藏」→「冰箱」） */
+        locationAliases: Map<String, String> = emptyMap(),
+        /** 食品别名 → 正式名（例如「樱桃」→「车厘子」） */
+        foodAliases: Map<String, String> = emptyMap(),
     ): FoodDraft? {
         if (raw.isBlank()) return null
         // 先做同音字校正（西瓜被听成吸管这类问题在这里兜住），用户自定义食品也参与校正
@@ -127,7 +131,7 @@ object VoiceTextParser {
         }
 
         // ---------------- 位置（自定义位置优先，其次内置规则） ----------------
-        var location: String = matchCustomLocation(text, customLocations) ?: ""
+        var location: String = matchCustomLocation(text, customLocations, locationAliases) ?: ""
         if (location.isNotEmpty()) {
             highlights += FoodField.LOCATION
             confidence += 0.1f
@@ -143,7 +147,8 @@ object VoiceTextParser {
         }
 
         // ---------------- 名称（先算名称，数量提取需要避开名称里的字） ----------------
-        val name = extractName(text, location, null)
+        // 把命中的位置名与别名一并从文本里剔除，避免别名（如"冷藏"）混进食物名称
+        val name = extractName(text, location, null, customLocations + locationAliases.keys)
         if (name.isNotBlank()) {
             highlights += FoodField.NAME
             confidence += 0.2f
@@ -325,6 +330,8 @@ object VoiceTextParser {
         defaultSource: String = "voice",
         customLocations: List<String> = emptyList(),
         customFoods: List<String> = emptyList(),
+        locationAliases: Map<String, String> = emptyMap(),
+        foodAliases: Map<String, String> = emptyMap(),
     ): List<FoodDraft> {
         // 用「不消耗分隔符」的方式切分：「还有三天过期」里的"还有"后面跟着时间量词，
         // 不能当成两条记录的分隔词（否则一句话会被拆成"有名称没日期"+"有日期没名称"两条残缺记录）。
@@ -336,9 +343,13 @@ object VoiceTextParser {
         val parts = separators.split(raw)
             .map { it.trim() }
             .filter { it.length >= 2 }
-        val drafts = parts.mapNotNull { parse(it, defaultSource, customLocations, customFoods) }
+        val drafts = parts.mapNotNull {
+            parse(it, defaultSource, customLocations, customFoods, locationAliases, foodAliases)
+        }
         if (drafts.isNotEmpty()) return mergeIncomplete(drafts)
-        return listOfNotNull(parse(raw, defaultSource, customLocations, customFoods))
+        return listOfNotNull(
+            parse(raw, defaultSource, customLocations, customFoods, locationAliases, foodAliases),
+        )
     }
 
     /**
@@ -423,18 +434,30 @@ object VoiceTextParser {
     /**
      * 匹配用户自定义位置。支持后缀变体：配置了「茶几」时，
      * 说「茶几底下」「茶几下面」「茶几上」也能识别到「茶几」。
-     * 返回命中的自定义位置名（保留用户写的原文），没命中返回 null。
+     *
+     * 也支持**别名**：给「冰箱」配了别名「冷藏」后，说「放冷藏」会归到「冰箱」。
+     * 返回的是**正式名**（不是别名），这样入库后的位置文字始终统一。
      */
-    private fun matchCustomLocation(text: String, customLocations: List<String>): String? {
+    private fun matchCustomLocation(
+        text: String,
+        customLocations: List<String>,
+        aliasMap: Map<String, String> = emptyMap(),
+    ): String? {
         if (customLocations.isEmpty()) return null
+
+        // 候选项 = 正式名 + 别名；匹配到别名时返回它对应的正式名
+        val candidates = buildList {
+            customLocations.forEach { add(it.trim() to it.trim()) }
+            aliasMap.forEach { (alias, canonical) -> add(alias.trim() to canonical.trim()) }
+        }.filter { it.first.isNotBlank() }
+
         // 名字长的优先，避免「茶几」抢走「茶几抽屉」
-        for (loc in customLocations.sortedByDescending { it.length }) {
-            val name = loc.trim()
-            if (name.isBlank()) continue
-            if (text.contains(name)) return name
+        for ((word, canonical) in candidates.sortedByDescending { it.first.length }) {
+            if (canonical.isBlank()) continue
+            if (text.contains(word)) return canonical
             // 去掉常见方位后缀再比一次（"茶几底下" -> "茶几"）
             for (suffix in LOCATION_SUFFIXES) {
-                if (text.contains(name + suffix)) return name
+                if (text.contains(word + suffix)) return canonical
             }
         }
         return null
@@ -446,8 +469,20 @@ object VoiceTextParser {
     )
 
     /** 去掉已识别的字段词，剩下的中文就是名称 */
-    private fun extractName(text: String, location: String, unit: String?): String {
+    private fun extractName(
+        text: String,
+        location: String,
+        unit: String?,
+        /** 用户自定义的位置/食品名与其别名：也要从名称里剔除 */
+        customWords: List<String> = emptyList(),
+    ): String {
         var s = text
+        // 先剔除用户自定义词（长词优先，避免"茶几"截断"茶几抽屉"）
+        customWords.map { it.trim() }
+            .filter { it.length >= 2 }
+            .distinct()
+            .sortedByDescending { it.length }
+            .forEach { s = s.replace(it, " ") }
         val removable = buildList {
             addAll(LOCATION_RULES.flatMap { it.first })            // 口语里的方位/拥有/动词，都不是食物名称
             addAll(

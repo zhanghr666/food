@@ -24,6 +24,8 @@ data class FoodStats(
 class FoodRepository(
     private val foodDao: FoodDao,
     private val settingsDao: SettingsDao,
+    private val storageLocationDao: StorageLocationDao,
+    private val commonFoodDao: CommonFoodDao,
     private val appContext: android.content.Context,
 ) {
 
@@ -31,6 +33,12 @@ class FoodRepository(
     fun appContext(): android.content.Context = appContext
 
     val settings: Flow<AppSettings> = settingsDao.observe().map { it ?: AppSettings.DEFAULT }
+
+    /** 常用存放位置（按用户排序） */
+    val storageLocations: Flow<List<StorageLocation>> = storageLocationDao.observeAll()
+
+    /** 常用食品（按用户排序） */
+    val commonFoods: Flow<List<CommonFood>> = commonFoodDao.observeAll()
 
     private val settingsCache = MutableStateFlow(AppSettings.DEFAULT)
     val currentSettings: StateFlow<AppSettings> = settingsCache.asStateFlow()
@@ -93,17 +101,72 @@ class FoodRepository(
     suspend fun loadSettings(): AppSettings {
         val stored = settingsDao.get()
         if (stored == null) {
-            // 首次安装：写入默认设置（含默认常用存放位置）
-            return AppSettings.DEFAULT.also { settingsDao.upsert(it) }
+            // 全新安装：先播种默认位置，再写设置行（并把初始化标记置上）
+            seedDefaultsIfNeeded(initialized = false)
+            return AppSettings.DEFAULT.copy(locationsInitialized = true)
+                .also { settingsDao.upsert(it) }
         }
-        // 老版本升级上来时 customLocations 为空，补上默认位置，避免"位置下拉是空的"
-        if (stored.customLocations.isBlank()) {
-            val migrated = stored.copy(customLocations = Locations.DEFAULT_STORED)
+        if (!stored.locationsInitialized) {
+            // 从 v7 及更早升级上来：位置表已由迁移填充，这里只补标记
+            seedDefaultsIfNeeded(initialized = false)
+            val migrated = stored.copy(locationsInitialized = true)
             settingsDao.upsert(migrated)
             return migrated
         }
         return stored
     }
+
+    /**
+     * 只在"从未初始化过"时播种默认常用位置。
+     *
+     * [initialized] 为 true 表示位置表以前就生效过 —— 那时表空意味着**用户主动删光了**，
+     * 不能再把默认值塞回来。
+     */
+    private suspend fun seedDefaultsIfNeeded(initialized: Boolean) {
+        if (initialized) return
+        if (storageLocationDao.count() > 0) return
+        storageLocationDao.insertAllIgnore(Locations.DEFAULTS.toStorageLocations())
+        commonFoodDao.insertAllIgnore(CommonFoods.DEFAULTS.toCommonFoods())
+    }
+
+    // ---------------- 常用存放位置 ----------------
+
+    /** 新增位置（去重、限长、限总量），返回是否真的加进去了 */
+    suspend fun addStorageLocation(name: String): Boolean {
+        val clean = name.sanitizeName() ?: return false
+        if (storageLocationDao.count() >= MAX_CUSTOM_ITEMS) return false
+        val next = storageLocationDao.getAll().size
+        val id = storageLocationDao.insertIgnore(
+            StorageLocation(name = clean, sortOrder = next),
+        )
+        return id != -1L
+    }
+
+    suspend fun removeStorageLocation(id: Long) = storageLocationDao.deleteById(id)
+
+    suspend fun updateStorageLocationAlias(id: Long, alias: String) =
+        storageLocationDao.updateAlias(id, alias.sanitizeAlias())
+
+    /** 有多少条在库记录正在使用这个位置（删除前提示用） */
+    suspend fun storageLocationUsage(name: String): Int = storageLocationDao.usageCount(name)
+
+    // ---------------- 常用食品 ----------------
+
+    /** 新增常用食品（去重、限长、限总量），返回是否真的加进去了 */
+    suspend fun addCommonFood(name: String): Boolean {
+        val clean = name.sanitizeName() ?: return false
+        if (commonFoodDao.count() >= MAX_CUSTOM_ITEMS) return false
+        val next = commonFoodDao.getAll().size
+        val id = commonFoodDao.insertIgnore(
+            CommonFood(name = clean, sortOrder = next),
+        )
+        return id != -1L
+    }
+
+    suspend fun removeCommonFood(id: Long) = commonFoodDao.deleteById(id)
+
+    suspend fun updateCommonFoodAlias(id: Long, alias: String) =
+        commonFoodDao.updateAlias(id, alias.sanitizeAlias())
 
     suspend fun saveSettings(settings: AppSettings) {
         settingsDao.upsert(settings)
@@ -159,4 +222,42 @@ class FoodRepository(
             }
         }.thenBy { it.expiryDate ?: Long.MAX_VALUE }
             .thenBy { it.name }
+
+    companion object {
+        /**
+         * 常用位置 / 常用食品的**条数上限**。
+         *
+         * 这两份列表都会进入离线语音语法词表，条目过多会拖慢识别、设置页也难维护。
+         */
+        const val MAX_CUSTOM_ITEMS = 20
+
+        private const val MAX_NAME_LENGTH = 12
+
+        /**
+         * 清洗用户输入的名字：去空格、限长、**把 `|` 换成全角**。
+         *
+         * `|` 是别名与历史数据的保留分隔符，出现在名字里会破坏解析。
+         */
+        internal fun String.sanitizeName(): String? {
+            val clean = trim()
+                .replace('|', '｜')
+                .replace(',', '，')
+                .take(MAX_NAME_LENGTH)
+            return clean.ifBlank { null }
+        }
+
+        /** 清洗别名串：统一分隔符、去重、限长 */
+        internal fun String.sanitizeAlias(): String =
+            trim()
+                .replace(',', '|')
+                .replace('，', '|')
+                .replace('、', '|')
+                .replace('｜', '|')
+                .split('|')
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .joinToString("|")
+                .take(60)
+    }
 }

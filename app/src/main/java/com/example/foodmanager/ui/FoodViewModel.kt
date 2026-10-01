@@ -7,10 +7,12 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.foodmanager.data.AppSettings
+import com.example.foodmanager.data.CommonFood
 import com.example.foodmanager.data.FoodItem
 import com.example.foodmanager.data.FoodRepository
 import com.example.foodmanager.data.FoodStats
 import com.example.foodmanager.data.Locations
+import com.example.foodmanager.data.StorageLocation
 import com.example.foodmanager.notify.ExpiryReminderWorker
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -52,24 +54,61 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
     val locations: StateFlow<List<String>> =
         repository.locations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
+    /** 常用存放位置实体（设置页需要编辑别名，所以暴露完整对象） */
+    val storageLocations: StateFlow<List<StorageLocation>> =
+        repository.storageLocations
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    /** 常用食品实体（同上） */
+    val commonFoods: StateFlow<List<CommonFood>> =
+        repository.commonFoods
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
     /**
-     * 常用存放位置：**唯一来源**就是「设置 - 常用存放地点」。
+     * 常用存放位置的名字列表：**唯一来源**是 `storage_locations` 表。
      * 录入页/编辑页的位置选项、语音解析的位置词表都用它，保证各处一致。
      */
     val allLocations: StateFlow<List<String>> =
-        settings.map { it.customLocationList }
-            .stateIn(
-                viewModelScope,
-                SharingStarted.WhileSubscribed(5_000),
-                Locations.DEFAULTS,
-            )
+        repository.storageLocations
+            .map { list -> list.map { it.name } }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), Locations.DEFAULTS)
 
     /** 语音识别用的常用位置（与 allLocations 同源） */
     val customLocations: StateFlow<List<String>> = allLocations
 
-    /** 用户维护的常用食品（参与语音语法与同音字校正） */
+    /**
+     * 语音别名映射：别名 → 正式名（位置与常用食品合并）。
+     *
+     * 例如把「冰箱」配上别名「冷藏」，用户说"放冷藏"也会归到"冰箱"。
+     */
+    val locationAliasMap: StateFlow<Map<String, String>> =
+        repository.storageLocations
+            .map { list ->
+                buildMap {
+                    list.forEach { loc -> loc.aliasList.forEach { alias -> put(alias, loc.name) } }
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** 常用食品的别名映射（同上） */
+    val foodAliasMap: StateFlow<Map<String, String>> =
+        repository.commonFoods
+            .map { list ->
+                buildMap {
+                    list.forEach { food -> food.aliasList.forEach { alias -> put(alias, food.name) } }
+                }
+            }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
+
+    /** 拍照识别是否"一张照片只解析一条"（默认 true，小票批量场景可关闭） */
+    val ocrSingleItem: StateFlow<Boolean> =
+        settings.map { it.ocrSingleItem }
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), true)
+
+    /** 用户维护的常用食品名（参与语音语法与同音字校正） */
     val customFoods: StateFlow<List<String>> =
-        settings.map { it.customFoodList }
+        repository.commonFoods
+            .map { list -> list.map { it.name } }
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val archived: StateFlow<List<FoodItem>> =
@@ -93,19 +132,20 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
 
     fun save(item: FoodItem, onDone: (Long) -> Unit = {}) {
         viewModelScope.launch {
+            // 「上次使用的位置/单位」只作为**记忆**保留，不再自动套用到新录入上
+            // （之前由 reuseLastLocation 开关控制，已按需求移除该开关）
             val settings = repository.loadSettings()
-            val prepared = if (settings.reuseLastLocation && item.location.isNotBlank()) {
-                repository.saveSettings(settings.copy(lastLocation = item.location, lastUnit = item.unit))
-                item
-            } else {
-                item
+            val nextLocation = item.location.ifBlank { settings.lastLocation }
+            if (nextLocation != settings.lastLocation || item.unit != settings.lastUnit) {
+                repository.saveSettings(
+                    settings.copy(lastLocation = nextLocation, lastUnit = item.unit),
+                )
             }
-            if (prepared.id == 0L) {
-                val id = repository.add(prepared)
-                onDone(id)
+            if (item.id == 0L) {
+                onDone(repository.add(item))
             } else {
-                repository.update(prepared)
-                onDone(prepared.id)
+                repository.update(item)
+                onDone(item.id)
             }
             ExpiryReminderWorker.runNow(repository.appContext())
         }
@@ -114,16 +154,19 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
     fun addDrafts(items: List<FoodItem>, onDone: (Int) -> Unit = {}) {
         viewModelScope.launch {
             val settings = repository.loadSettings()
-            val prepared = if (settings.reuseLastLocation) {
-                val lastLoc = items.firstOrNull { it.location.isNotBlank() }?.location ?: settings.lastLocation
-                val lastUnit = items.firstOrNull()?.unit ?: settings.lastUnit
-                repository.saveSettings(settings.copy(lastLocation = lastLoc, lastUnit = lastUnit))
-                items
-            } else {
-                items
+            // 只记录"本次用到的位置/单位"供下次参考，**不**回填到位置为空的条目上
+            val usedLocation = items.firstOrNull { it.location.isNotBlank() }?.location
+            val usedUnit = items.firstOrNull()?.unit
+            if (usedLocation != null || usedUnit != null) {
+                repository.saveSettings(
+                    settings.copy(
+                        lastLocation = usedLocation ?: settings.lastLocation,
+                        lastUnit = usedUnit ?: settings.lastUnit,
+                    ),
+                )
             }
-            repository.addAll(prepared)
-            onDone(prepared.size)
+            repository.addAll(items)
+            onDone(items.size)
             ExpiryReminderWorker.runNow(repository.appContext())
         }
     }
@@ -152,42 +195,52 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
         }
     }
 
-    /** 新增一个自定义存放位置（自动去重、限长） */
-    fun addCustomLocation(name: String) {
-        val clean = name.trim().take(12)
-        if (clean.isBlank()) return
-        updateSettings { s ->
-            if (s.customLocationList.contains(clean)) return@updateSettings s
-            val next = s.customLocationList + clean
-            s.copy(customLocations = next.joinToString("|"))
+    // ---------------- 常用存放位置 ----------------
+
+    /**
+     * 新增一个常用存放位置。
+     *
+     * [onResult] 用于把"为什么没加上"告诉界面：
+     * `true` = 已添加，`false` = 名称为空 / 已存在 / 已达上限。
+     */
+    fun addStorageLocation(name: String, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            onResult(repository.addStorageLocation(name))
         }
     }
 
-    /** 删除一个自定义存放位置 */
-    fun removeCustomLocation(name: String) {
-        updateSettings { s ->
-            val next = s.customLocationList.filter { it != name }
-            s.copy(customLocations = next.joinToString("|"))
+    /**
+     * 删除一个常用存放位置。
+     *
+     * **不会改动已有记录里的位置文字** —— 删掉的只是下拉可选项。
+     */
+    fun removeStorageLocation(id: Long) {
+        viewModelScope.launch { repository.removeStorageLocation(id) }
+    }
+
+    /** 设置某个位置的语音别名（例如「冰箱」配「冷藏|冷藏室」） */
+    fun updateStorageLocationAlias(id: Long, alias: String) {
+        viewModelScope.launch { repository.updateStorageLocationAlias(id, alias) }
+    }
+
+    /** 有多少条**在库**记录正在使用这个位置（删除前提示用） */
+    suspend fun storageLocationUsage(name: String): Int = repository.storageLocationUsage(name)
+
+    // ---------------- 常用食品 ----------------
+
+    fun addCommonFood(name: String, onResult: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            onResult(repository.addCommonFood(name))
         }
     }
 
-    /** 新增一个常用食品（会参与语音语法词表与同音字校正） */
-    fun addCustomFood(name: String) {
-        val clean = name.trim().take(12)
-        if (clean.isBlank()) return
-        updateSettings { s ->
-            if (s.customFoodList.contains(clean)) return@updateSettings s
-            val next = s.customFoodList + clean
-            s.copy(customFoods = next.joinToString("|"))
-        }
+    fun removeCommonFood(id: Long) {
+        viewModelScope.launch { repository.removeCommonFood(id) }
     }
 
-    /** 删除一个常用食品 */
-    fun removeCustomFood(name: String) {
-        updateSettings { s ->
-            val next = s.customFoodList.filter { it != name }
-            s.copy(customFoods = next.joinToString("|"))
-        }
+    /** 设置某个常用食品的语音别名（例如「车厘子」配「樱桃」） */
+    fun updateCommonFoodAlias(id: Long, alias: String) {
+        viewModelScope.launch { repository.updateCommonFoodAlias(id, alias) }
     }
 
     /** 记住「录入」页上次选择的方式：photo / voice / manual */
@@ -203,6 +256,14 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
     }
 
     companion object {
+        /**
+         * 自定义位置 / 常用食品的**条数上限**。
+         *
+         * 这两份列表都会进入离线语音的语法词表，条目过多既拖慢识别、
+         * 又让设置页难以维护，所以限制在 20 条。
+         */
+        const val MAX_CUSTOM_ITEMS = 20
+
         fun factory(repository: FoodRepository): ViewModelProvider.Factory =
             object : ViewModelProvider.Factory {
                 @Suppress("UNCHECKED_CAST")
