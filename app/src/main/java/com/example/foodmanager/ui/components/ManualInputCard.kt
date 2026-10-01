@@ -10,6 +10,8 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
@@ -31,12 +33,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
 import com.example.foodmanager.core.DateUtils
 import com.example.foodmanager.data.Categories
 import com.example.foodmanager.data.FoodItem
@@ -78,6 +83,7 @@ fun ManualInputCard(
     statusMessage: String = "",
     modifier: Modifier = Modifier,
 ) {
+    val scope = rememberCoroutineScope()
     var dateTarget by remember { mutableStateOf<String?>(null) }
     var showLocationWarning by remember { mutableStateOf(false) }
 
@@ -257,12 +263,22 @@ fun ManualInputCard(
             }
 
             Spacer(Modifier.height(10.dp))
+            // 备注是表单最后一项：键盘弹出时若无处可滚，会被输入法永久遮住。
+            // 这里在获得焦点时主动请求滚动到可视区（外层容器已做输入法避让）。
+            val noteBringIntoView = remember { BringIntoViewRequester() }
             OutlinedTextField(
                 value = item.note,
                 onValueChange = { v -> onChange(item.copy(note = v)) },
                 label = { Text("备注") },
                 minLines = 2,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .bringIntoViewRequester(noteBringIntoView)
+                    .onFocusChanged { state ->
+                        if (state.isFocused) {
+                            scope.launch { noteBringIntoView.bringIntoView() }
+                        }
+                    },
             )
 
             Spacer(Modifier.height(12.dp))

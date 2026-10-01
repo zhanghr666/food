@@ -71,6 +71,7 @@ import com.example.foodmanager.ui.components.ComboField
 import com.example.foodmanager.ui.components.DateFieldRow
 import com.example.foodmanager.ui.components.DropdownField
 import com.example.foodmanager.ui.components.FoodDatePickerDialog
+import com.example.foodmanager.ui.components.imeAwarePadding
 import com.example.foodmanager.ui.components.ManualInputCard
 import com.example.foodmanager.ui.components.PhotoInputCard
 import com.example.foodmanager.ui.components.VoiceInputCard
@@ -202,7 +203,10 @@ fun ScanScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+                // 为键盘留出空间：否则表单底部的「备注」框会被输入法永久遮住
+                // （它是列表最后一项，后面没有内容，列表滚不动）
+                .imeAwarePadding(),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {

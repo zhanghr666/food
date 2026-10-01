@@ -40,6 +40,7 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.foodmanager.ui.EditorViewModel
+import com.example.foodmanager.ui.components.imeAwarePadding
 import com.example.foodmanager.ui.components.ManualInputCard
 import com.example.foodmanager.ui.components.PhotoInputCard
 import com.example.foodmanager.ui.components.VoiceInputCard
@@ -121,6 +122,8 @@ fun EditorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
+                // 为键盘留出空间，否则表单底部的「备注」框会被输入法遮住
+                .imeAwarePadding()
                 .verticalScroll(rememberScrollState())
                 .padding(horizontal = 12.dp, vertical = 8.dp),
         ) {
