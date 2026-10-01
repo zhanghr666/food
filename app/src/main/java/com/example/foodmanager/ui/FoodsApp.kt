@@ -28,6 +28,7 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -64,7 +65,11 @@ fun FoodsApp(
     // 0=首页 1=库存 2=录入 3=设置
     var tab by rememberSaveable { mutableIntStateOf(0) }
     // 全屏子页面（不走底部栏）：null = 主页面
-    var fullScreen by remember { mutableStateOf<FullScreen?>(null) }
+    // 用 rememberSaveable + Saver：进程被系统回收后重建时，"正在编辑哪一条"
+    // 也能恢复，不会莫名掉回首页。
+    var fullScreen by rememberSaveable(stateSaver = FullScreenSaver) {
+        mutableStateOf<FullScreen?>(null)
+    }
     // 「录入」页当前展开的方式；首次进入用设置里记住的值，默认 manual
     var entryMode by rememberSaveable { mutableStateOf<String?>(null) }
     val effectiveEntryMode = entryMode ?: settings.lastEntryMode.ifBlank { "manual" }
@@ -202,6 +207,28 @@ private sealed interface FullScreen {
     data object Archived : FullScreen
     data class Editor(val itemId: Long) : FullScreen
 }
+
+/**
+ * [FullScreen] 的保存/恢复器。
+ *
+ * 保存形式：`0` 表示归档页；正数表示「正在编辑的食物 id」。
+ */
+private val FullScreenSaver: Saver<FullScreen?, Long> = Saver(
+    save = { screen ->
+        when (screen) {
+            null -> -1L
+            FullScreen.Archived -> 0L
+            is FullScreen.Editor -> screen.itemId
+        }
+    },
+    restore = { value ->
+        when {
+            value < 0L -> null
+            value == 0L -> FullScreen.Archived
+            else -> FullScreen.Editor(value)
+        }
+    },
+)
 
 private data class BottomTab(
     val label: String,

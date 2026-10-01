@@ -163,13 +163,17 @@ fun FoodCard(
                 Spacer(Modifier.height(6.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(
-                        text = "${formatQuantity(item.quantity)} ${item.unit}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                    Spacer(Modifier.width(10.dp))
+                    // 数量为 0 表示未填写：整块隐藏，避免出现「0 个」这种噪音
+                    // （与列表副标题 describeQuantityText、通知里的处理保持一致）
+                    if (item.quantity > 0) {
+                        Text(
+                            text = "${formatQuantity(item.quantity)} ${item.unit}",
+                            style = MaterialTheme.typography.bodyMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                        Spacer(Modifier.width(10.dp))
+                    }
                     LocationIcon(item.location)
                     Spacer(Modifier.width(3.dp))
                     Text(

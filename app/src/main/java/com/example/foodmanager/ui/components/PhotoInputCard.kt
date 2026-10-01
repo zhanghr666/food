@@ -27,6 +27,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -61,6 +62,11 @@ fun PhotoInputCard(
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val ocrEngine = remember { OcrEngine() }
+
+    // ML Kit 的 TextRecognizer 持有原生资源，离开界面时要显式关闭
+    DisposableEffect(ocrEngine) {
+        onDispose { runCatching { ocrEngine.close() } }
+    }
 
     var processing by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
