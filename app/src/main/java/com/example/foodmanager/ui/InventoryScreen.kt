@@ -60,12 +60,23 @@ fun InventoryScreen(
     val today = remember { DateUtils.today() }
 
     var pendingDelete by remember { mutableStateOf<FoodItem?>(null) }
+    // 「标记已用完」会从库存移除，先确认一下（可撤销路径：设置 → 查看归档 → 恢复到库存）
+    var pendingArchive by remember { mutableStateOf<FoodItem?>(null) }
 
     Scaffold(
         topBar = {
             Column {
                 TopAppBar(
-                    title = { Text("库存（${items.size}）") },
+                    // 有筛选时把总数也标出来，避免「库存（1）」看起来像"库存只剩 1 件"
+                    title = {
+                        Text(
+                            if (query.isBlank() && locationFilter.isBlank()) {
+                                "库存（${items.size}）"
+                            } else {
+                                "库存（筛出 ${items.size}）"
+                            },
+                        )
+                    },
                     actions = {
                         IconButton(onClick = onOpenScan) {
                             Icon(Icons.Filled.Add, contentDescription = "录入")
@@ -166,7 +177,7 @@ fun InventoryScreen(
                     onQuantityChange = { delta -> viewModel.changeQuantity(item.id, delta) },
                     onEdit = { onOpenItem(item.id) },
                     onDelete = { pendingDelete = item },
-                    onArchive = { viewModel.setArchived(item.id, true) },
+                    onArchive = { pendingArchive = item },
                 )
             }
         }
@@ -185,6 +196,25 @@ fun InventoryScreen(
             },
             dismissButton = {
                 TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            },
+        )
+    }
+
+    pendingArchive?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingArchive = null },
+            title = { Text("标记为已用完？") },
+            text = {
+                Text("「${target.name}」会从库存移到「已用完 / 已丢弃」，需要时可在设置里的归档中恢复。")
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.setArchived(target.id, true)
+                    pendingArchive = null
+                }) { Text("标记已用完") }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingArchive = null }) { Text("取消") }
             },
         )
     }

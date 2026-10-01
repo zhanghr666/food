@@ -12,6 +12,7 @@ import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.example.foodmanager.MainActivity
+import com.example.foodmanager.R
 import com.example.foodmanager.core.DateUtils
 import com.example.foodmanager.data.FoodItem
 
@@ -138,7 +139,8 @@ object FoodNotifier {
         )
 
         val notification = NotificationCompat.Builder(context, channelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert)
+            // 用自己的应用图标（单色小图标），而不是系统通用的感叹号
+            .setSmallIcon(R.drawable.ic_notification)
             .setContentTitle(title)
             .setContentText(text)
             .setStyle(NotificationCompat.BigTextStyle().bigText(bigText))

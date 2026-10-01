@@ -45,8 +45,6 @@ import com.example.foodmanager.ui.screens.EditorScreen
 import com.example.foodmanager.ui.screens.ScanScreen
 import kotlinx.coroutines.launch
 
-import android.util.Log
-
 /** 主界面：4 个主页面用状态直接切换（不再走 NavHost，避免内容与底部栏不同步） */
 @Composable
 fun FoodsApp(
@@ -86,8 +84,6 @@ fun FoodsApp(
         }
     }
 
-    Log.i("FoodsApp", "渲染 tab=$tab fullScreen=$fullScreen")
-
     Scaffold(
         // Scaffold 默认底色是 surface（近白 #FFFBFF），与页面米色背景（background）不一致：
         // 内容不足一屏时（例如键盘弹出把内容顶起），会露出一块近白色，看起来像"白框"。
@@ -101,7 +97,6 @@ fun FoodsApp(
                         NavigationBarItem(
                             selected = selected,
                             onClick = {
-                                Log.i("FoodsApp", "点击标签 ${item.label} -> tab=$index")
                                 tab = index
                             },
                             icon = {
@@ -145,8 +140,6 @@ fun FoodsApp(
                         viewModel = editorViewModel,
                         customLocations = customLocations,
                         customFoods = customFoods,
-                        onAddCustomLocation = { viewModel.addCustomLocation(it) },
-                        onRemoveCustomLocation = { viewModel.removeCustomLocation(it) },
                         onBack = { fullScreen = null },
                         onSaved = {
                             ExpiryReminderWorker.runNow(context)

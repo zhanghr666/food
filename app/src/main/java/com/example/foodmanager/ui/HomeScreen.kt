@@ -49,7 +49,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import android.util.Log
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.foodmanager.core.DateUtils
 import com.example.foodmanager.data.FoodItem
@@ -82,7 +81,6 @@ fun HomeScreen(
     val listState = rememberLazyListState()
 
     LaunchedEffect(Unit) {
-        Log.i("HomeScreen", "首页已渲染：记录数=${stats.total}")
         viewModel.refreshToday()
         today = DateUtils.today()
     }
@@ -385,7 +383,11 @@ private fun AlertRow(
                     style = MaterialTheme.typography.bodyLarge,
                 )
                 Text(
-                    text = "${com.example.foodmanager.ui.components.formatQuantity(item.quantity)}${item.unit}　${item.location}　到期 ${DateUtils.formatShort(item.expiryDate)}",
+                    text = com.example.foodmanager.ui.components.joinInfo(
+                        com.example.foodmanager.ui.components.describeQuantityText(item.quantity, item.unit),
+                        item.location,
+                        "到期 " + DateUtils.formatShort(item.expiryDate),
+                    ),
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )

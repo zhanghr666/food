@@ -61,8 +61,6 @@ fun EditorScreen(
     viewModel: EditorViewModel,
     customLocations: List<String> = emptyList(),
     customFoods: List<String> = emptyList(),
-    onAddCustomLocation: (String) -> Unit = {},
-    onRemoveCustomLocation: (String) -> Unit = {},
     onBack: () -> Unit,
     onSaved: (Long) -> Unit,
 ) {

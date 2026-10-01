@@ -309,7 +309,10 @@ fun ArchivedScreen(
                         Column(modifier = Modifier.weight(1f)) {
                             Text(item.name, style = MaterialTheme.typography.titleMedium)
                             Text(
-                                text = "${com.example.foodmanager.ui.components.formatQuantity(item.quantity)}${item.unit}　${item.location}",
+                                text = com.example.foodmanager.ui.components.joinInfo(
+                                    com.example.foodmanager.ui.components.describeQuantityText(item.quantity, item.unit),
+                                    item.location,
+                                ),
                                 style = MaterialTheme.typography.labelSmall,
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )

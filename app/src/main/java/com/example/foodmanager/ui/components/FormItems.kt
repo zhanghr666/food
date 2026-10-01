@@ -242,6 +242,21 @@ fun FormChipRow(
     }
 }
 
+/**
+ * 把若干信息片段拼成一行，自动跳过空白片段。
+ *
+ * 用于列表副标题：位置可能为空、数量可能为 0，
+ * 直接字符串拼接会留下多余的「　　」空白。
+ */
+fun joinInfo(vararg parts: String?, separator: String = "　"): String =
+    parts.mapNotNull { it?.trim() }
+        .filter { it.isNotEmpty() }
+        .joinToString(separator)
+
+/** 数量描述：数量为 0 表示未填写，返回空串（避免出现「0个」） */
+fun describeQuantityText(quantity: Double, unit: String): String =
+    if (quantity > 0) "${formatQuantity(quantity)}$unit" else ""
+
 /** 数量 + 单位 一行 */
 @Composable
 fun QuantityUnitRow(
