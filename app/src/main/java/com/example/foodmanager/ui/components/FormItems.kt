@@ -47,7 +47,75 @@ import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
 
-/** 下拉选择框：分类 / 单位 / 存放位置 共用 */
+/**
+ * 可编辑的下拉框（组合框）：既能从常用项里选，也能直接输入自定义值。
+ *
+ * 用于「存放位置」这类既要有常用项、又允许自由填写的字段
+ * （例如语音识别出「茶几底下」，或用户临时输入一个没存过的位置）。
+ */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun ComboField(
+    label: String,
+    options: List<String>,
+    value: String,
+    onValueChange: (String) -> Unit,
+    modifier: Modifier = Modifier,
+    placeholder: String? = null,
+    supportingText: String? = null,
+) {
+    var expanded by remember { mutableStateOf(false) }
+    // 输入时过滤出匹配项，方便快速定位
+    val filtered = remember(value, options) {
+        if (value.isBlank()) options else options.filter { it.contains(value) }
+    }
+
+    ExposedDropdownMenuBox(
+        expanded = expanded,
+        onExpandedChange = { expanded = !expanded },
+        modifier = modifier,
+    ) {
+        OutlinedTextField(
+            value = value,
+            onValueChange = {
+                onValueChange(it)
+                expanded = true
+            },
+            label = { Text(label) },
+            placeholder = placeholder?.let { { Text(it, style = MaterialTheme.typography.labelSmall) } },
+            supportingText = supportingText?.let { { Text(it) } },
+            singleLine = true,
+            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
+            modifier = Modifier
+                .menuAnchor(MenuAnchorType.PrimaryEditable)
+                .fillMaxWidth(),
+        )
+        if (filtered.isNotEmpty()) {
+            ExposedDropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                filtered.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option) },
+                        onClick = {
+                            onValueChange(option)
+                            expanded = false
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 数量输入框的初始文本：未填写（0）时显示 `0`。
+ *
+ * 输入框用独立的文本状态维护，用户键入时直接替换，
+ * 不会出现"初始 0 占位、输入 5 变成 50"的问题。
+ */
+fun initialQuantityText(quantity: Double): String =
+    if (quantity <= 0.0) "0" else formatQuantity(quantity)
+
+/** 下拉选择框：分类 / 单位 共用 */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun DropdownField(
@@ -57,7 +125,6 @@ fun DropdownField(
     labelOf: (String) -> String,
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
-    isError: Boolean = false,
     supportingText: String? = null,
 ) {
     var expanded by remember { mutableStateOf(false) }
@@ -71,7 +138,6 @@ fun DropdownField(
             onValueChange = {},
             readOnly = true,
             label = { Text(label) },
-            isError = isError,
             supportingText = supportingText?.let { { Text(it) } },
             trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded) },
             modifier = Modifier

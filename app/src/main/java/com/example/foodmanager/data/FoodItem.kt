@@ -36,7 +36,8 @@ data class FoodItem(
     val expiryDate: Long? = null,
 
     /** 存放位置，如：冰箱冷藏 / 冰箱冷冻 / 常温储物柜 */
-    val location: String = "常温储物柜",
+    /** 存放位置（不设默认值，留空表示用户尚未指定） */
+    val location: String = "",
 
     /** 备注 */
     val note: String = "",
@@ -92,18 +93,21 @@ object Units {
     const val DEFAULT = "个"
 }
 
-/** 常用存放位置 */
+/**
+ * 存放位置。
+ *
+ * **单一数据源**：位置的唯一来源是「设置 - 常用存放地点」（存于 `AppSettings.customLocations`）。
+ * 这里只提供新装的默认值，不再维护第二份内置列表 —— 否则录入页下拉与设置页会不一致。
+ */
 object Locations {
-    val ALL = listOf(
-        "冰箱冷藏",
-        "冰箱冷冻",
-        "冰箱变温室",
-        "常温储物柜",
-        "厨房台面",
-        "阳台",
-        "酒柜",
-    )
-    const val DEFAULT = "常温储物柜"
+    /** 新安装时的默认常用位置（用户可在设置里增删） */
+    val DEFAULTS = listOf("厨房", "冰箱", "客厅储藏室", "储物柜", "茶几")
+
+    /** 存放位置不设默认值：新建食物时留空，由用户自己选或填 */
+    const val DEFAULT = ""
+
+    /** 默认常用位置的存储形式（`|` 分隔） */
+    val DEFAULT_STORED = DEFAULTS.joinToString("|")
 }
 
 /** 常用分类 */

@@ -28,7 +28,9 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     DB_NAME,
                 )
-                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    // 正式迁移：升级不丢数据
+                    // （原来用 fallbackToDestructiveMigration，每次改表结构都会清空用户数据）
+                    .addMigrations(*DatabaseMigrations.ALL)
                     .build()
                     .also { instance = it }
             }

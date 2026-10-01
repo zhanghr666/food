@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
@@ -22,15 +23,19 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.InputChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.unit.dp
 import com.example.foodmanager.core.DateUtils
 import com.example.foodmanager.data.Categories
@@ -57,19 +62,32 @@ fun ManualInputCard(
     onChange: (FoodItem) -> Unit,
     onSave: () -> Unit,
     customLocations: List<String> = emptyList(),
-    onAddCustomLocation: (String) -> Unit = {},
-    onRemoveCustomLocation: (String) -> Unit = {},
     title: String = "手工录入",
     subtitle: String = "逐项填写食物信息，填完点下方按钮保存",
     saveLabel: String = "添加到库存",
     showAddIcon: Boolean = true,
     secondaryAction: (@Composable () -> Unit)? = null,
     onCollapse: (() -> Unit)? = null,
+    /** 保存后把焦点送回名称框，便于连续录入 */
+    nameFocusRequester: FocusRequester? = null,
+    /** 父级每次重置表单时 +1，用于清空表单内部状态（如数量框） */
+    resetToken: Int = 0,
+    /** true 时由父级负责「未填存放位置」的提醒（避免两处弹窗） */
+    parentHandlesLocationWarning: Boolean = false,
+    /** 表单内显示的一行状态提示（如"已保存xxx"），不受键盘遮挡 */
+    statusMessage: String = "",
     modifier: Modifier = Modifier,
 ) {
-    var newLocation by remember { mutableStateOf("") }
     var dateTarget by remember { mutableStateOf<String?>(null) }
     var showLocationWarning by remember { mutableStateOf(false) }
+
+    // 数量输入框用独立文本状态维护：
+    // 若直接绑定数值，初始的 0/1 会占住输入框，用户输入 5 会变成 50/15。
+    var quantityText by remember { mutableStateOf(initialQuantityText(item.quantity)) }
+    // 编辑对象变化，或父级重置表单时，重新同步
+    LaunchedEffect(item.id, resetToken) {
+        quantityText = initialQuantityText(item.quantity)
+    }
 
     val canSave = item.name.isNotBlank()
     val doSave = onSave
@@ -96,6 +114,31 @@ fun ManualInputCard(
                 color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
             )
 
+            // 保存成功提示放在表单顶部：键盘弹出时也一定看得见
+            if (statusMessage.isNotBlank()) {
+                Spacer(Modifier.height(8.dp))
+                Surface(
+                    color = MaterialTheme.colorScheme.primary,
+                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 10.dp, vertical = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.Check,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        Spacer(Modifier.width(6.dp))
+                        Text(text = statusMessage, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+            }
+
             Spacer(Modifier.height(12.dp))
 
             OutlinedTextField(
@@ -103,7 +146,15 @@ fun ManualInputCard(
                 onValueChange = { v -> onChange(item.copy(name = v)) },
                 label = { Text("食物名称 *") },
                 singleLine = true,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (nameFocusRequester != null) {
+                            Modifier.focusRequester(nameFocusRequester)
+                        } else {
+                            Modifier
+                        },
+                    ),
             )
 
             Spacer(Modifier.height(10.dp))
@@ -117,61 +168,40 @@ fun ManualInputCard(
 
             Spacer(Modifier.height(10.dp))
             QuantityUnitRow(
-                quantityText = formatQuantity(item.quantity),
-                onQuantityChange = { v -> onChange(item.copy(quantity = v.toDoubleOrNull() ?: 0.0)) },
+                quantityText = quantityText,
+                onQuantityChange = { raw ->
+                    // 只保留数字与小数点，避免带出其它字符
+                    val cleaned = raw.filter { it.isDigit() || it == '.' }
+                    quantityText = cleaned
+                    onChange(item.copy(quantity = cleaned.toDoubleOrNull() ?: 0.0))
+                },
                 unitOptions = Units.ALL,
                 unit = item.unit,
                 onUnitChange = { v -> onChange(item.copy(unit = v)) },
             )
 
             Spacer(Modifier.height(10.dp))
-            DropdownField(
+            // 存放位置：可选常用位置，也可直接输入自定义值；
+            // 不标红（红框在 Material 里表示"校验失败"，这里是"还没填"，用文字提示即可）
+            ComboField(
                 label = "存放位置",
-                options = (Locations.ALL + customLocations).distinct(),
-                selected = item.location,
-                labelOf = { it.ifBlank { "未填写" } },
-                onSelect = { v -> onChange(item.copy(location = v)) },
-                isError = item.location.isBlank(),
-                supportingText = if (item.location.isBlank()) "建议填写存放位置，方便以后查找" else null,
+                options = customLocations.distinct(),
+                value = item.location,
+                onValueChange = { v -> onChange(item.copy(location = v)) },
+                placeholder = "可直接输入，如：茶几底下",
             )
-
-            Spacer(Modifier.height(6.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                OutlinedTextField(
-                    value = newLocation,
-                    onValueChange = { newLocation = it },
-                    label = { Text("添加常用位置（如：茶几底下）") },
-                    singleLine = true,
-                    modifier = Modifier.weight(1f),
-                )
-                Spacer(Modifier.width(8.dp))
-                Button(
-                    onClick = {
-                        val clean = newLocation.trim()
-                        if (clean.isNotBlank()) {
-                            onAddCustomLocation(clean)
-                            onChange(item.copy(location = clean))
-                            newLocation = ""
-                        }
-                    },
-                    enabled = newLocation.isNotBlank(),
-                ) { Text("添加") }
-            }
-            if (customLocations.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                FlowRow(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    customLocations.forEach { loc ->
-                        InputChip(
-                            selected = false,
-                            onClick = { onRemoveCustomLocation(loc) },
-                            label = { Text("$loc ✕", style = MaterialTheme.typography.labelSmall) },
-                        )
-                    }
-                }
-            }
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = if (item.location.isBlank()) {
+                    "建议填写位置，方便以后查找。常用位置可在「设置 - 常用存放地点」里增删；" +
+                        "也可以直接输入，或语音说一个位置（如「放在茶几底下」）自动识别。"
+                } else {
+                    "常用位置可在「设置 - 常用存放地点」里增删；也可以直接输入，或" +
+                        "语音说一个位置（如「放在茶几底下」）自动识别。"
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.75f),
+            )
 
             Spacer(Modifier.height(10.dp))
             DateFieldRow(
@@ -242,7 +272,13 @@ fun ManualInputCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Button(
-                    onClick = { if (item.location.isBlank()) showLocationWarning = true else doSave() },
+                    onClick = {
+                        if (!parentHandlesLocationWarning && item.location.isBlank()) {
+                            showLocationWarning = true
+                        } else {
+                            doSave()
+                        }
+                    },
                     enabled = canSave,
                     modifier = Modifier.weight(1f),
                 ) {

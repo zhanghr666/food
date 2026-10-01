@@ -111,8 +111,13 @@ data class AppSettings(
     @ColumnInfo(defaultValue = "个") val lastUnit: String = "个",
 
     /**
-     * 用户自定义的存放位置，用 `|` 分隔（例如「茶几底下|飘窗|书桌抽屉」）。
-     * 这些位置会：① 出现在位置选择里；② 加入语音识别的位置词表。
+     * 常用存放位置，用 `|` 分隔（例如「厨房|冰箱|客厅储藏室|储物柜|茶几」）。
+     *
+     * **这是位置列表的唯一来源**：录入页/编辑页的下拉、语音识别的位置词表都用它。
+     *
+     * 注意：列默认值保持空串 —— 改列默认值等于改 schema（会影响 Room 的身份校验），
+     * 默认位置由 [AppSettings] 的 Kotlin 默认值与
+     * [FoodRepository.loadSettings] 的兜底逻辑提供。
      */
     @ColumnInfo(defaultValue = "") val customLocations: String = "",
 

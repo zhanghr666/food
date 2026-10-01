@@ -52,16 +52,20 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
     val locations: StateFlow<List<String>> =
         repository.locations.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    /** 可供选择的存放位置 = 内置位置 + 用户自定义位置（去重保序） */
+    /**
+     * 常用存放位置：**唯一来源**就是「设置 - 常用存放地点」。
+     * 录入页/编辑页的位置选项、语音解析的位置词表都用它，保证各处一致。
+     */
     val allLocations: StateFlow<List<String>> =
-        settings.map { s ->
-            (Locations.ALL + s.customLocationList).distinct()
-        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), Locations.ALL)
-
-    /** 语音识别用的自定义位置 */
-    val customLocations: StateFlow<List<String>> =
         settings.map { it.customLocationList }
-            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+            .stateIn(
+                viewModelScope,
+                SharingStarted.WhileSubscribed(5_000),
+                Locations.DEFAULTS,
+            )
+
+    /** 语音识别用的常用位置（与 allLocations 同源） */
+    val customLocations: StateFlow<List<String>> = allLocations
 
     /** 用户维护的常用食品（参与语音语法与同音字校正） */
     val customFoods: StateFlow<List<String>> =

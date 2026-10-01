@@ -71,6 +71,9 @@ fun FoodsApp() {
     Log.i("FoodsApp", "渲染 tab=$tab fullScreen=$fullScreen")
 
     Scaffold(
+        // Scaffold 默认底色是 surface（近白 #FFFBFF），与页面米色背景（background）不一致：
+        // 内容不足一屏时（例如键盘弹出把内容顶起），会露出一块近白色，看起来像"白框"。
+        containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
         bottomBar = {
             if (fullScreen == null) {
@@ -163,8 +166,6 @@ fun FoodsApp() {
                             entryMode = mode
                             if (mode.isNotBlank()) viewModel.saveEntryMode(mode)
                         },
-                        onAddCustomLocation = { viewModel.addCustomLocation(it) },
-                        onRemoveCustomLocation = { viewModel.removeCustomLocation(it) },
                         onAddItems = { items, onDone -> viewModel.addDrafts(items, onDone) },
                     )
 

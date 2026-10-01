@@ -44,6 +44,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -52,19 +53,28 @@ import androidx.compose.runtime.snapshots.SnapshotStateList
 import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import com.example.foodmanager.core.CameraFiles
 import com.example.foodmanager.core.DateUtils
 import com.example.foodmanager.core.FoodDraft
+import com.example.foodmanager.data.Categories
 import com.example.foodmanager.data.FoodItem
+import com.example.foodmanager.data.Units
 import com.example.foodmanager.ocr.OcrEngine
 import com.example.foodmanager.ocr.OcrTextParser
+import com.example.foodmanager.ui.components.ComboField
+import com.example.foodmanager.ui.components.DateFieldRow
+import com.example.foodmanager.ui.components.DropdownField
+import com.example.foodmanager.ui.components.FoodDatePickerDialog
 import com.example.foodmanager.ui.components.ManualInputCard
 import com.example.foodmanager.ui.components.PhotoInputCard
 import com.example.foodmanager.ui.components.VoiceInputCard
+import com.example.foodmanager.ui.components.initialQuantityText
 import com.example.foodmanager.voice.VoiceTextParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -84,8 +94,6 @@ fun ScanScreen(
     /** 当前展开的方式：photo / voice / manual（由上层持有，便于首页快捷入口指定） */
     entryMode: String = "manual",
     onEntryModeChange: (String) -> Unit = {},
-    onAddCustomLocation: (String) -> Unit = {},
-    onRemoveCustomLocation: (String) -> Unit = {},
     onAddItems: (List<FoodItem>, (Int) -> Unit) -> Unit,
 ) {
     val context = LocalContext.current
@@ -98,15 +106,20 @@ fun ScanScreen(
     val voiceExpanded = entryMode == "voice"
     val manualExpanded = entryMode == "manual"
 
-    // 手工录入的表单数据（受控）
-    var manualDraft by remember { mutableStateOf(blankDraft(defaultLocation, defaultUnit)) }
+    // 手工录入的表单数据（受控）。位置不预填，由用户自己选或填。
+    var manualDraft by remember { mutableStateOf(blankDraft(defaultUnit)) }
+    // 保存后 +1，用于让表单内部状态（数量框）一并清空
+    var manualResetToken by remember { mutableIntStateOf(0) }
+    // 手工录入的成功提示：直接显示在表单内，不依赖底部浮层（键盘不会挡住）
+    var manualStatus by remember { mutableStateOf("") }
+    val nameFocus = remember { FocusRequester() }
+    val keyboard = LocalSoftwareKeyboardController.current
 
     var processing by remember { mutableStateOf(false) }
     var statusText by remember { mutableStateOf("") }
     val drafts = remember { emptyList<FoodDraft>().toMutableStateList() }
     var rawText by remember { mutableStateOf("") }
     var showRaw by remember { mutableStateOf(false) }
-    var pendingLocation by remember { mutableStateOf(defaultLocation) }
 
     var pendingCameraPath by remember { mutableStateOf<String?>(null) }
 
@@ -182,6 +195,8 @@ fun ScanScreen(
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("录入食物") }) },
+        // 与主框架统一底色，避免内容不足一屏时露出近白色块（"白框"）
+        containerColor = MaterialTheme.colorScheme.background,
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         LazyColumn(
@@ -277,18 +292,23 @@ fun ScanScreen(
                         onSave = {
                             val toSave = manualDraft
                             onAddItems(listOf(toSave)) { count ->
-                                statusText = "已入库 $count 条：「${toSave.name}」"
+                                manualStatus = "已入库 $count 条：「${toSave.name}」"
                             }
-                            // 保存后清空表单，方便连续录入下一条
-                            manualDraft = blankDraft(defaultLocation, defaultUnit)
+                            // 保存后：字段全清空 + 焦点回到名称框 + 表单内显示成功提示
+                            manualDraft = blankDraft(defaultUnit)
+                            manualResetToken++
+                            manualStatus = "已保存「${toSave.name}」，可以继续录入下一条"
+                            nameFocus.requestFocus()
+                            keyboard?.show()
                         },
                         customLocations = customLocations,
-                        onAddCustomLocation = onAddCustomLocation,
-                        onRemoveCustomLocation = onRemoveCustomLocation,
                         title = "手工录入",
                         subtitle = "逐项填写食物信息，填完点下方按钮保存",
-                        saveLabel = "添加到库存",
+                        saveLabel = "保存并继续录入",
                         showAddIcon = true,
+                        nameFocusRequester = nameFocus,
+                        resetToken = manualResetToken,
+                        statusMessage = manualStatus,
                     )
                 }
             }
@@ -362,13 +382,12 @@ fun ScanScreen(
                     DraftCard(
                         index = index,
                         draft = draft,
+                        customLocations = customLocations,
                         onUpdate = { updated -> drafts[index] = updated },
                         onRemove = { drafts.removeAt(index) },
                         onAddSingle = {
-                            val item = draft.toFoodItem(
-                                pendingLocation.ifBlank { defaultLocation },
-                                defaultUnit,
-                            )
+                            // 草稿自己的位置优先，只有为空时才用默认位置兜底
+                            val item = draft.toFoodItem(defaultLocation, defaultUnit)
                             onAddItems(listOf(item)) { count ->
                                 drafts.removeAt(index)
                                 statusText = "已单独入库 $count 条：「${item.name}」"
@@ -380,7 +399,8 @@ fun ScanScreen(
                 item {
                     Button(
                         onClick = {
-                            val items = drafts.map { it.toFoodItem(pendingLocation.ifBlank { defaultLocation }, defaultUnit) }
+                            // 同上：不要用统一的 pendingLocation 覆盖每条草稿自己的位置
+                            val items = drafts.map { it.toFoodItem(defaultLocation, defaultUnit) }
                             onAddItems(items) { count ->
                                 drafts.clear()
                                 statusText = "已入库 $count 条食物"
@@ -400,12 +420,12 @@ fun ScanScreen(
     }
 }
 
-/** 空表单草稿 */
-private fun blankDraft(location: String, unit: String) = FoodItem(
+/** 空白表单：位置刻意留空（不设默认值），让用户主动选择或填写 */
+private fun blankDraft(unit: String) = FoodItem(
     name = "",
     unit = unit.ifBlank { "个" },
-    location = location,
-    purchaseDate = com.example.foodmanager.core.DateUtils.today(),
+    location = "",
+    purchaseDate = DateUtils.today(),
     source = "manual",
 )
 
@@ -475,11 +495,13 @@ private fun ModeEntry(
 private fun DraftCard(
     index: Int,
     draft: FoodDraft,
+    customLocations: List<String>,
     onUpdate: (FoodDraft) -> Unit,
     onRemove: () -> Unit,
     onAddSingle: () -> Unit,
 ) {
     var editing by remember { mutableStateOf(false) }
+    var dateTarget by remember { mutableStateOf<String?>(null) }
 
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -542,40 +564,55 @@ private fun DraftCard(
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(Modifier.height(6.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // 数量用独立文本状态：绑定数值会导致清空时"跳回"旧数字
+                    var qtyText by remember(draft) {
+                        mutableStateOf(initialQuantityText(draft.quantity))
+                    }
                     OutlinedTextField(
-                        value = com.example.foodmanager.ui.components.formatQuantity(draft.quantity),
-                        onValueChange = { v -> onUpdate(draft.copy(quantity = v.toDoubleOrNull() ?: draft.quantity)) },
+                        value = qtyText,
+                        onValueChange = { raw ->
+                            val cleaned = raw.filter { it.isDigit() || it == '.' }
+                            qtyText = cleaned
+                            onUpdate(draft.copy(quantity = cleaned.toDoubleOrNull() ?: 0.0))
+                        },
                         label = { Text("数量") },
                         singleLine = true,
                         modifier = Modifier.weight(1f),
                     )
-                    OutlinedTextField(
-                        value = draft.unit,
-                        onValueChange = { onUpdate(draft.copy(unit = it)) },
-                        label = { Text("单位") },
-                        singleLine = true,
+                    Spacer(Modifier.width(10.dp))
+                    DropdownField(
+                        label = "单位",
+                        options = Units.ALL,
+                        selected = draft.unit,
+                        labelOf = { it },
+                        onSelect = { onUpdate(draft.copy(unit = it)) },
                         modifier = Modifier.weight(1f),
                     )
                 }
                 Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
+                // 与手工录入表单一致：可选常用位置，也可自由输入
+                ComboField(
+                    label = "存放位置",
+                    options = customLocations.distinct(),
                     value = draft.location,
                     onValueChange = { onUpdate(draft.copy(location = it)) },
-                    label = { Text("存放位置") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = "可直接输入，如：茶几底下",
                 )
                 Spacer(Modifier.height(6.dp))
-                OutlinedTextField(
+                DropdownField(
+                    label = "分类",
+                    options = listOf("") + Categories.ALL,
+                    selected = draft.category,
+                    labelOf = { if (it.isBlank()) "未分类" else it },
+                    onSelect = { onUpdate(draft.copy(category = it)) },
+                )
+                Spacer(Modifier.height(6.dp))
+                DateFieldRow(
+                    label = "保质期至",
                     value = DateUtils.format(draft.expiryDate),
-                    onValueChange = { v ->
-                        val parsed = DateUtils.parse(v)
-                        if (parsed != null || v.isBlank()) onUpdate(draft.copy(expiryDate = parsed))
-                    },
-                    label = { Text("保质期至（yyyy-MM-dd）") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                    onPick = { dateTarget = "expiry" },
+                    onClear = { onUpdate(draft.copy(expiryDate = null)) },
                 )
             }
 
@@ -610,9 +647,26 @@ private fun DraftCard(
             }
         }
     }
+
+    // 保质期日期选择
+    dateTarget?.let { target ->
+        FoodDatePickerDialog(
+            initialDate = draft.expiryDate ?: DateUtils.today(),
+            onDismiss = { dateTarget = null },
+            onConfirm = { millis ->
+                onUpdate(draft.copy(expiryDate = millis))
+                dateTarget = null
+            },
+        )
+    }
 }
 
-/** 草稿 -> 数据库实体 */
+/**
+ * 草稿 -> 数据库实体。
+ *
+ * 位置以**草稿自己的值为准**，只有为空时才用默认位置兜底
+ * （曾经的 bug：调用方传入了"最近位置"，把语音/OCR 识别到的位置覆盖掉）。
+ */
 private fun FoodDraft.toFoodItem(defaultLocation: String, defaultUnit: String): FoodItem = FoodItem(
     name = name.ifBlank { "未命名食物" },
     category = category,

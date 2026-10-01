@@ -192,8 +192,7 @@ fun EditorScreen(
                 onChange = { updated -> viewModel.update { updated } },
                 onSave = { viewModel.save { id -> onSaved(id) } },
                 customLocations = customLocations,
-                onAddCustomLocation = onAddCustomLocation,
-                onRemoveCustomLocation = onRemoveCustomLocation,
+                parentHandlesLocationWarning = true,
                 title = if (viewModel.isEditing) "食物信息" else "手工录入",
                 subtitle = if (mode == "manual") {
                     "逐项填写食物信息，填完点下方按钮保存"

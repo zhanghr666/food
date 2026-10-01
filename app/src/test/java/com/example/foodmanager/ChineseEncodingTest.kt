@@ -18,7 +18,12 @@ class ChineseEncodingTest {
     fun chineseLiteralsAreIntact() {
         assertEquals("20840,33026,32431,29275,22902", codes("\u5168\u8102\u7eaf\u725b\u5976"))
         assertEquals("29275,22902", codes("\u725b\u5976"))
-        assertEquals("20912,31665,20919,34255", codes(Locations.ALL[0]))
+        // 默认常用位置：厨房 / 冰箱 / 客厅储藏室 / 储物柜 / 茶几
+        assertEquals("21416,25151", codes(Locations.DEFAULTS[0]))
+        assertEquals("20912,31665", codes(Locations.DEFAULTS[1]))
+        assertEquals("23458,21381,20648,34255,23460", codes(Locations.DEFAULTS[2]))
+        assertEquals("20648,29289,26588", codes(Locations.DEFAULTS[3]))
+        assertEquals("33590,20960", codes(Locations.DEFAULTS[4]))
         assertEquals("20010", codes(Units.ALL[0]))
     }
 

@@ -90,8 +90,20 @@ class FoodRepository(
 
     val locations: Flow<List<String>> = foodDao.observeLocations()
 
-    suspend fun loadSettings(): AppSettings =
-        settingsDao.get() ?: AppSettings.DEFAULT.also { settingsDao.upsert(it) }
+    suspend fun loadSettings(): AppSettings {
+        val stored = settingsDao.get()
+        if (stored == null) {
+            // 首次安装：写入默认设置（含默认常用存放位置）
+            return AppSettings.DEFAULT.also { settingsDao.upsert(it) }
+        }
+        // 老版本升级上来时 customLocations 为空，补上默认位置，避免"位置下拉是空的"
+        if (stored.customLocations.isBlank()) {
+            val migrated = stored.copy(customLocations = Locations.DEFAULT_STORED)
+            settingsDao.upsert(migrated)
+            return migrated
+        }
+        return stored
+    }
 
     suspend fun saveSettings(settings: AppSettings) {
         settingsDao.upsert(settings)
