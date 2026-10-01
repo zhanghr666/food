@@ -18,7 +18,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ArrowForward
+import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.DocumentScanner
 import androidx.compose.material.icons.filled.Edit
@@ -223,7 +223,7 @@ fun HomeScreen(
                         )
                         Text("全部", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
                         Icon(
-                            Icons.Filled.ArrowForward,
+                            Icons.AutoMirrored.Filled.ArrowForward,
                             contentDescription = null,
                             modifier = Modifier.size(16.dp),
                             tint = MaterialTheme.colorScheme.primary,
@@ -283,7 +283,7 @@ private fun AlertBanner(
                     modifier = Modifier.weight(1f),
                 )
                 Icon(
-                    Icons.Filled.ArrowForward,
+                    Icons.AutoMirrored.Filled.ArrowForward,
                     contentDescription = null,
                     tint = color,
                     modifier = Modifier.size(18.dp),

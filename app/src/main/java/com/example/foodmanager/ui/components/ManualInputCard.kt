@@ -164,12 +164,14 @@ fun ManualInputCard(
             )
 
             Spacer(Modifier.height(10.dp))
-            DropdownField(
-                label = "分类",
-                options = listOf("") + Categories.ALL,
-                selected = item.category,
-                labelOf = { if (it.isBlank()) "未分类" else it },
-                onSelect = { v -> onChange(item.copy(category = v)) },
+            // 分类：非必填。可从内置分类里选，也可以直接手填自定义分类
+            // （例如「宝宝辅食」「宠物零食」这类内置列表没有的）
+            ComboField(
+                label = "分类（可选）",
+                options = Categories.ALL,
+                value = item.category,
+                onValueChange = { v -> onChange(item.copy(category = v)) },
+                placeholder = "可留空，也可直接输入",
             )
 
             Spacer(Modifier.height(10.dp))

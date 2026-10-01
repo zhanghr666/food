@@ -615,12 +615,13 @@ private fun DraftCard(
                     placeholder = "可直接输入，如：茶几底下",
                 )
                 Spacer(Modifier.height(6.dp))
-                DropdownField(
-                    label = "分类",
-                    options = listOf("") + Categories.ALL,
-                    selected = draft.category,
-                    labelOf = { if (it.isBlank()) "未分类" else it },
-                    onSelect = { onUpdate(draft.copy(category = it)) },
+                // 分类：与手工录入表单一致，可选可手填
+                ComboField(
+                    label = "分类（可选）",
+                    options = Categories.ALL,
+                    value = draft.category,
+                    onValueChange = { onUpdate(draft.copy(category = it)) },
+                    placeholder = "可留空，也可直接输入",
                 )
                 Spacer(Modifier.height(6.dp))
                 DateFieldRow(
