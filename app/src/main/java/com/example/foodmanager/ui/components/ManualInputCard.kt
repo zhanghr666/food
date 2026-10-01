@@ -17,6 +17,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.WarningAmber
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -60,6 +61,10 @@ import com.example.foodmanager.data.Units
  * @param saveLabel     主按钮文案
  * @param secondaryAction 次要操作（如「标记已用完」）
  * @param onCollapse    收起回调（为 null 时不显示）
+ * @param statusIsError 状态提示是否为"提醒"样式（橙色）而非"成功"样式（绿色）
+ *
+ * 说明：**卡片不自己做校验**。「未填存放位置」的确认、保存成功/被拦下的提示，
+ * 全部由父级（录入页 / 编辑页）统一处理 —— 否则会出现"某个保存入口不校验"或"弹两次窗"。
  */
 @Composable
 fun ManualInputCard(
@@ -77,15 +82,13 @@ fun ManualInputCard(
     nameFocusRequester: FocusRequester? = null,
     /** 父级每次重置表单时 +1，用于清空表单内部状态（如数量框） */
     resetToken: Int = 0,
-    /** true 时由父级负责「未填存放位置」的提醒（避免两处弹窗） */
-    parentHandlesLocationWarning: Boolean = false,
     /** 表单内显示的一行状态提示（如"已保存xxx"），不受键盘遮挡 */
     statusMessage: String = "",
+    statusIsError: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
     var dateTarget by remember { mutableStateOf<String?>(null) }
-    var showLocationWarning by remember { mutableStateOf(false) }
 
     // 数量输入框用独立文本状态维护：
     // 若直接绑定数值，初始的 0/1 会占住输入框，用户输入 5 会变成 50/15。
@@ -96,7 +99,6 @@ fun ManualInputCard(
     }
 
     val canSave = item.name.isNotBlank()
-    val doSave = onSave
 
     Card(
         modifier = modifier.fillMaxWidth(),
@@ -120,12 +122,21 @@ fun ManualInputCard(
                 color = MaterialTheme.colorScheme.onTertiaryContainer.copy(alpha = 0.85f),
             )
 
-            // 保存成功提示放在表单顶部：键盘弹出时也一定看得见
+            // 状态提示放在表单顶部：键盘弹出时也一定看得见
             if (statusMessage.isNotBlank()) {
                 Spacer(Modifier.height(8.dp))
                 Surface(
-                    color = MaterialTheme.colorScheme.primary,
-                    contentColor = MaterialTheme.colorScheme.onPrimary,
+                    // 成功=主色，提醒=错误色（如"还没填存放位置，已拦下"）
+                    color = if (statusIsError) {
+                        MaterialTheme.colorScheme.errorContainer
+                    } else {
+                        MaterialTheme.colorScheme.primary
+                    },
+                    contentColor = if (statusIsError) {
+                        MaterialTheme.colorScheme.onErrorContainer
+                    } else {
+                        MaterialTheme.colorScheme.onPrimary
+                    },
                     shape = RoundedCornerShape(8.dp),
                 ) {
                     Row(
@@ -135,7 +146,11 @@ fun ManualInputCard(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Icon(
-                            Icons.Filled.Check,
+                            imageVector = if (statusIsError) {
+                                Icons.Filled.WarningAmber
+                            } else {
+                                Icons.Filled.Check
+                            },
                             contentDescription = null,
                             modifier = Modifier.size(16.dp),
                         )
@@ -293,13 +308,7 @@ fun ManualInputCard(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Button(
-                    onClick = {
-                        if (!parentHandlesLocationWarning && item.location.isBlank()) {
-                            showLocationWarning = true
-                        } else {
-                            doSave()
-                        }
-                    },
+                    onClick = onSave,
                     enabled = canSave,
                     modifier = Modifier.weight(1f),
                 ) {
@@ -317,26 +326,6 @@ fun ManualInputCard(
                 }
             }
         }
-    }
-
-    // 未填存放位置的提醒
-    if (showLocationWarning) {
-        androidx.compose.material3.AlertDialog(
-            onDismissRequest = { showLocationWarning = false },
-            title = { Text("还没有填写存放位置") },
-            text = {
-                Text("填写存放位置后，可以按位置快速查找，语音录入时也更容易自动识别。\n\n确定要这样保存吗？")
-            },
-            confirmButton = {
-                TextButton(onClick = { showLocationWarning = false }) { Text("回去填写") }
-            },
-            dismissButton = {
-                TextButton(onClick = {
-                    showLocationWarning = false
-                    doSave()
-                }) { Text("仍要保存") }
-            },
-        )
     }
 
     // 日期选择

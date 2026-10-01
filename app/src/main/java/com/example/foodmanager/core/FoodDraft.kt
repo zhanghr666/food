@@ -2,6 +2,11 @@ package com.example.foodmanager.core
 
 /** 一条待录入的草稿（来自 OCR 或语音），可在 UI 中编辑后再入库。 */
 data class FoodDraft(
+    /**
+     * 稳定标识：列表用它做 key。
+     * 若用列表下标当身份，删除/入库后下标会错位，导致"删错一条"或卡片状态串到下一条上。
+     */
+    val draftId: Long = nextId(),
     val name: String = "",
     val category: String = "",
     val quantity: Double = 1.0,
@@ -18,6 +23,13 @@ data class FoodDraft(
     val confidence: Float = 0.5f,
 ) {
     val isUsable: Boolean get() = name.isNotBlank() || expiryDate != null
+
+    companion object {
+        private val idGen = java.util.concurrent.atomic.AtomicLong(0L)
+
+        /** 单调递增的草稿 id（进程内唯一即可，草稿不落库） */
+        fun nextId(): Long = idGen.incrementAndGet()
+    }
 }
 
 /** 字段名常量，用于提示与高亮 */

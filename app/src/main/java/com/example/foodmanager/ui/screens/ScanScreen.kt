@@ -3,7 +3,6 @@ package com.example.foodmanager.ui.screens
 import android.Manifest
 import android.content.pm.PackageManager
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -33,7 +32,6 @@ import androidx.compose.material.icons.filled.PhotoLibrary
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilledTonalButton
 import androidx.compose.material3.Icon
@@ -46,15 +44,12 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.runtime.snapshots.SnapshotStateList
-import androidx.compose.runtime.toMutableStateList
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -62,15 +57,12 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import androidx.core.content.ContextCompat
-import com.example.foodmanager.core.CameraFiles
 import com.example.foodmanager.core.DateUtils
 import com.example.foodmanager.core.FoodDraft
 import com.example.foodmanager.data.Categories
 import com.example.foodmanager.data.FoodItem
 import com.example.foodmanager.data.Units
-import com.example.foodmanager.ocr.OcrEngine
-import com.example.foodmanager.ocr.OcrTextParser
+import com.example.foodmanager.ui.ScanEntryState
 import com.example.foodmanager.ui.components.ComboField
 import com.example.foodmanager.ui.components.DateFieldRow
 import com.example.foodmanager.ui.components.DropdownField
@@ -80,7 +72,6 @@ import com.example.foodmanager.ui.components.PhotoInputCard
 import com.example.foodmanager.ui.components.VoiceInputCard
 import com.example.foodmanager.ui.components.initialQuantityText
 import com.example.foodmanager.voice.VoiceTextParser
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -91,7 +82,8 @@ import kotlinx.coroutines.withContext
 @OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ScanScreen(
-    defaultLocation: String,
+    /** 界面状态由上层持有：切标签页后草稿与表单内容不丢 */
+    state: ScanEntryState,
     defaultUnit: String,
     customLocations: List<String> = emptyList(),
     customFoods: List<String> = emptyList(),
@@ -100,10 +92,8 @@ fun ScanScreen(
     onEntryModeChange: (String) -> Unit = {},
     onAddItems: (List<FoodItem>, (Int) -> Unit) -> Unit,
 ) {
-    val context = LocalContext.current
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
-    val ocrEngine = remember { OcrEngine() }
 
     // 三种录入方式由 entryMode 控制，默认手工录入
     val photoExpanded = entryMode == "photo"
@@ -115,93 +105,13 @@ fun ScanScreen(
     // 保存后滚动回表单顶部用
     val listState = rememberLazyListState()
     val focusManager = LocalFocusManager.current
-
-    // 手工录入的表单数据（受控）。位置不预填，由用户自己选或填。
-    var manualDraft by remember { mutableStateOf(blankDraft(defaultUnit)) }
-    // 保存后 +1，用于让表单内部状态（数量框）一并清空
-    var manualResetToken by remember { mutableIntStateOf(0) }
-    // 手工录入的成功提示：直接显示在表单内，不依赖底部浮层（键盘不会挡住）
-    var manualStatus by remember { mutableStateOf("") }
     val nameFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
 
-    var processing by remember { mutableStateOf(false) }
-    var statusText by remember { mutableStateOf("") }
-    val drafts = remember { emptyList<FoodDraft>().toMutableStateList() }
-    var rawText by remember { mutableStateOf("") }
+    val drafts = state.drafts
     var showRaw by remember { mutableStateOf(false) }
+    var statusText by remember { mutableStateOf("") }
 
-    var pendingCameraPath by remember { mutableStateOf<String?>(null) }
-
-    val cameraLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.TakePicture()
-    ) { success ->
-        val path = pendingCameraPath
-        if (success && path != null) {
-            processing = true
-            statusText = "正在识别图片文字…"
-            scope.launch {
-                runCatching {
-                    withContext(Dispatchers.Default) {
-                        val bitmap = OcrEngine.loadBitmapFromFile(path)
-                        ocrEngine.recognizeBitmap(bitmap)
-                    }
-                }.onSuccess { text ->
-                    rawText = text
-                    val parsed = OcrTextParser.parse(text, "ocr")
-                    drafts.addAll(parsed)
-                    processing = false
-                    statusText = if (parsed.isEmpty()) {
-                        "没有从图片里识别到食物信息，可尝试重新拍摄或手动添加"
-                    } else {
-                        "识别到 ${parsed.size} 条，请核对后入库"
-                    }
-                }.onFailure {
-                    processing = false
-                    statusText = "识别失败：${it.message}"
-                }
-            }
-        }
-    }
-
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) {
-            val file = CameraFiles.createImageFile(context)
-            pendingCameraPath = file.absolutePath
-            runCatching { cameraLauncher.launch(CameraFiles.uriFor(context, file)) }
-                .onFailure { statusText = "无法启动相机：${it.message}" }
-        } else {
-            statusText = "需要相机权限才能拍照识别"
-        }
-    }
-
-    val galleryLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        if (uri != null) {
-            processing = true
-            statusText = "正在识别图片文字…"
-            scope.launch {
-                runCatching { ocrEngine.recognizeAndParse(context, uri) }
-                    .onSuccess { result ->
-                        rawText = result.rawText
-                        drafts.addAll(result.drafts)
-                        processing = false
-                        statusText = if (result.drafts.isEmpty()) {
-                            "没有从图片里识别到食物信息，可展开原文查看识别结果"
-                        } else {
-                            "识别到 ${result.drafts.size} 条，请核对后入库"
-                        }
-                    }
-                    .onFailure {
-                        processing = false
-                        statusText = "识别失败：${it.message}"
-                    }
-            }
-        }
-    }
 
     Scaffold(
         topBar = { TopAppBar(title = { Text("录入食物") }) },
@@ -265,13 +175,13 @@ fun ScanScreen(
                     PhotoInputCard(
                         title = "拍照录入",
                         onRecognized = { text, parsed ->
-                            rawText = text
+                            state.rawText = text
+                            state.addDrafts(parsed)
                             statusText = if (parsed.isEmpty()) {
                                 "没有从图片里识别到食物信息，可换一张或手工录入"
                             } else {
                                 "识别到 ${parsed.size} 条，请核对后入库"
                             }
-                            if (parsed.isNotEmpty()) drafts.addAll(parsed)
                         },
                     )
                 }
@@ -290,11 +200,14 @@ fun ScanScreen(
                         onResult = { text ->
                             val parsed = VoiceTextParser.parseBatch(text, "voice", customLocations, customFoods)
                             if (parsed.isEmpty()) {
+                                // 解析失败：提供「改用手工补填」，把原话带进名称框
+                                state.prefillName(text, defaultUnit)
+                                onEntryModeChange("manual")
                                 scope.launch {
-                                    snackbar.showSnackbar("识别到「$text」，但没能解析出食物信息，可手工录入")
+                                    snackbar.showSnackbar("没解析出食物信息，已切到手工录入并填入原文")
                                 }
                             } else {
-                                drafts.addAll(parsed)
+                                state.addDrafts(parsed)
                                 scope.launch {
                                     snackbar.showSnackbar("已加入 ${parsed.size} 条待入库记录，请核对后点「全部入库」")
                                 }
@@ -308,21 +221,29 @@ fun ScanScreen(
             if (manualExpanded) {
                 item {
                     ManualInputCard(
-                        item = manualDraft,
-                        onChange = { manualDraft = it },
+                        item = state.manualDraft,
+                        onChange = { state.manualDraft = it },
                         onSave = {
-                            val toSave = manualDraft
+                            val toSave = state.manualDraft
+                            if (toSave.location.isBlank()) {
+                                // 位置未填：拦下并给出提醒（不落库）
+                                state.manualStatusIsError = true
+                                state.manualStatus = "还没有填写存放位置，填写后再保存（位置会用于快速查找）"
+                                scope.launch { listState.animateScrollToItem(0) }
+                                return@ManualInputCard
+                            }
                             onAddItems(listOf(toSave)) { count ->
-                                manualStatus = "已入库 $count 条：「${toSave.name}」"
+                                state.manualStatusIsError = false
+                                state.manualStatus = "已入库 $count 条：「${toSave.name}」"
                             }
                             // ---------- 保存后的交互顺序 ----------
                             // 1) 先收起键盘与焦点，避免残留的聚焦状态让下拉/菜单重新弹开
                             keyboard?.hide()
                             focusManager.clearFocus(force = true)
                             // 2) 再清空表单；resetToken 变化会强制关闭所有已展开的下拉
-                            manualDraft = blankDraft(defaultUnit)
-                            manualResetToken++
-                            manualStatus = "已保存「${toSave.name}」，可以继续录入下一条"
+                            state.resetManual(defaultUnit)
+                            state.manualStatusIsError = false
+                            state.manualStatus = "已保存「${toSave.name}」，可以继续录入下一条"
                             // 3) 滚动回表单顶部，让用户看到提示 + 名称框
                             scope.launch { listState.animateScrollToItem(0) }
                         },
@@ -332,27 +253,14 @@ fun ScanScreen(
                         saveLabel = "保存并继续录入",
                         showAddIcon = true,
                         nameFocusRequester = nameFocus,
-                        resetToken = manualResetToken,
-                        statusMessage = manualStatus,
+                        resetToken = state.manualResetToken,
+                        statusMessage = state.manualStatus,
+                        statusIsError = state.manualStatusIsError,
                     )
                 }
             }
 
-            if (processing) {
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.Center,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
-                        Spacer(Modifier.width(10.dp))
-                        Text(statusText)
-                    }
-                }
-            } else if (statusText.isNotBlank()) {
+            if (statusText.isNotBlank()) {
                 item {
                     Text(
                         text = statusText,
@@ -363,10 +271,10 @@ fun ScanScreen(
                 }
             }
 
-            if (rawText.isNotBlank()) {
+            if (state.rawText.isNotBlank()) {
                 item {
                     TextButton(onClick = { showRaw = !showRaw }) {
-                        Text(if (showRaw) "收起识别原文" else "查看识别原文（${rawText.length} 字）")
+                        Text(if (showRaw) "收起识别原文" else "查看识别原文（${state.rawText.length} 字）")
                     }
                 }
                 if (showRaw) {
@@ -376,7 +284,7 @@ fun ScanScreen(
                             colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant),
                         ) {
                             Text(
-                                text = rawText,
+                                text = state.rawText,
                                 style = MaterialTheme.typography.bodyMedium,
                                 modifier = Modifier.padding(12.dp),
                             )
@@ -402,19 +310,25 @@ fun ScanScreen(
                     }
                 }
 
-                items(drafts.size) { index ->
-                    val draft = drafts[index]
+                // 用 draftId 做 key：按下标做身份会在删除/入库后错位，导致删错条目、
+                // 或把某条的展开状态串到下一条上。
+                items(drafts, key = { it.draftId }) { draft ->
                     DraftCard(
-                        index = index,
+                        index = drafts.indexOf(draft),
                         draft = draft,
                         customLocations = customLocations,
-                        onUpdate = { updated -> drafts[index] = updated },
-                        onRemove = { drafts.removeAt(index) },
+                        onUpdate = { updated ->
+                            val i = drafts.indexOfFirst { it.draftId == updated.draftId }
+                            if (i >= 0) drafts[i] = updated
+                        },
+                        onRemove = {
+                            drafts.removeAll { it.draftId == draft.draftId }
+                        },
                         onAddSingle = {
-                            // 草稿自己的位置优先，只有为空时才用默认位置兜底
-                            val item = draft.toFoodItem(defaultLocation, defaultUnit)
+                            // 位置留空就存空（不套用"最近位置"，见 toFoodItem 的说明）
+                            val item = draft.toFoodItem(defaultUnit)
                             onAddItems(listOf(item)) { count ->
-                                drafts.removeAt(index)
+                                drafts.removeAll { it.draftId == draft.draftId }
                                 statusText = "已单独入库 $count 条：「${item.name}」"
                             }
                         },
@@ -424,8 +338,8 @@ fun ScanScreen(
                 item {
                     Button(
                         onClick = {
-                            // 同上：不要用统一的 pendingLocation 覆盖每条草稿自己的位置
-                            val items = drafts.map { it.toFoodItem(defaultLocation, defaultUnit) }
+                            // 位置留空就存空，不用统一的 pendingLocation 覆盖每条草稿
+                            val items = drafts.map { it.toFoodItem(defaultUnit) }
                             onAddItems(items) { count ->
                                 drafts.clear()
                                 statusText = "已入库 $count 条食物"
@@ -444,15 +358,6 @@ fun ScanScreen(
         }
     }
 }
-
-/** 空白表单：位置刻意留空（不设默认值），让用户主动选择或填写 */
-private fun blankDraft(unit: String) = FoodItem(
-    name = "",
-    unit = unit.ifBlank { "个" },
-    location = "",
-    purchaseDate = DateUtils.today(),
-    source = "manual",
-)
 
 /** 录入方式入口卡片（拍照 / 语音 / 手工） */
 @Composable
@@ -690,10 +595,11 @@ private fun DraftCard(
 /**
  * 草稿 -> 数据库实体。
  *
- * 位置以**草稿自己的值为准**，只有为空时才用默认位置兜底
- * （曾经的 bug：调用方传入了"最近位置"，把语音/OCR 识别到的位置覆盖掉）。
+ * **位置留空就存空**：不再用"最近一次的位置"兜底。
+ * （原先会套用 settings.lastLocation，导致语音/OCR 没识别出位置时，
+ *   被静默改成上次的位置，看起来像"识别错了位置"。）
  */
-private fun FoodDraft.toFoodItem(defaultLocation: String, defaultUnit: String): FoodItem = FoodItem(
+private fun FoodDraft.toFoodItem(defaultUnit: String): FoodItem = FoodItem(
     name = name.ifBlank { "未命名食物" },
     category = category,
     quantity = if (quantity > 0) quantity else 1.0,
@@ -701,7 +607,7 @@ private fun FoodDraft.toFoodItem(defaultLocation: String, defaultUnit: String): 
     purchaseDate = purchaseDate,
     productionDate = productionDate,
     expiryDate = expiryDate,
-    location = location.ifBlank { defaultLocation },
+    location = location,
     note = note,
     source = source,
 )

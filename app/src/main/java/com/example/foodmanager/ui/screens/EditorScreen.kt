@@ -21,6 +21,8 @@ import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.PhotoCamera
+import androidx.compose.material.icons.filled.Place
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -73,6 +75,26 @@ fun EditorScreen(
     val item = viewModel.item
     val canSave = item.name.isNotBlank()
 
+    // 未填存放位置时的确认弹窗；两个保存入口（顶栏 ✓ / 表单按钮）共用同一套校验
+    var showLocationWarning by remember { mutableStateOf(false) }
+    // 表单内的状态提示（成功 / 被拦下）
+    var statusMessage by remember { mutableStateOf("") }
+    var statusIsError by remember { mutableStateOf(false) }
+
+    val doSave: () -> Unit = {
+        statusMessage = ""
+        statusIsError = false
+        viewModel.save { id -> onSaved(id) }
+    }
+    // 校验：位置为空先确认，避免"没填位置就存进去"（顶栏 ✓ 与表单按钮走同一路径）
+    val requestSave: () -> Unit = {
+        if (item.location.isBlank()) {
+            showLocationWarning = true
+        } else {
+            doSave()
+        }
+    }
+
     fun mergeFromDraft(draft: com.example.foodmanager.core.FoodDraft) {
         viewModel.update { current ->
             current.copy(
@@ -100,7 +122,7 @@ fun EditorScreen(
                 },
                 actions = {
                     IconButton(
-                        onClick = { viewModel.save { id -> onSaved(id) } },
+                        onClick = requestSave,
                         enabled = canSave,
                     ) {
                         Icon(Icons.Filled.Check, contentDescription = "保存")
@@ -201,9 +223,8 @@ fun EditorScreen(
             ManualInputCard(
                 item = item,
                 onChange = { updated -> viewModel.update { updated } },
-                onSave = { viewModel.save { id -> onSaved(id) } },
+                onSave = requestSave,
                 customLocations = customLocations,
-                parentHandlesLocationWarning = true,
                 title = if (viewModel.isEditing) "食物信息" else "手工录入",
                 subtitle = if (mode == "manual") {
                     "逐项填写食物信息，填完点下方按钮保存"
@@ -212,6 +233,8 @@ fun EditorScreen(
                 },
                 saveLabel = if (viewModel.isEditing) "保存修改" else "添加到库存",
                 showAddIcon = !viewModel.isEditing,
+                statusMessage = statusMessage,
+                statusIsError = statusIsError,
                 secondaryAction = if (viewModel.isEditing) {
                     {
                         TextButton(onClick = {
@@ -242,6 +265,30 @@ fun EditorScreen(
 
             Spacer(Modifier.height(24.dp))
         }
+    }
+
+    // 未填存放位置的确认：顶栏 ✓ 与表单按钮都走这里
+    if (showLocationWarning) {
+        AlertDialog(
+            onDismissRequest = { showLocationWarning = false },
+            icon = { Icon(Icons.Filled.Place, contentDescription = null) },
+            title = { Text("还没有填写存放位置") },
+            text = {
+                Text(
+                    "填写存放位置后，可以按位置快速查找食物，语音录入时也更容易自动识别。\n\n" +
+                        "现在「${item.name.ifBlank { "该食物" }}」的位置是空的，确定要这样保存吗？",
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = { showLocationWarning = false }) { Text("回去填写") }
+            },
+            dismissButton = {
+                TextButton(onClick = {
+                    showLocationWarning = false
+                    doSave()
+                }) { Text("仍要保存") }
+            },
+        )
     }
 }
 

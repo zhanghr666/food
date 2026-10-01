@@ -234,7 +234,9 @@ class EditorViewModel(
                 val settings = repository.loadSettings()
                 item = FoodItem(
                     name = "",
-                    location = settings.lastLocation.ifBlank { com.example.foodmanager.data.Locations.DEFAULT },
+                    // 存放位置刻意不预填（与录入页一致）：由用户自己选或自己填，
+                    // 保存时会有"未填位置"的确认提醒。
+                    location = "",
                     unit = settings.lastUnit.ifBlank { com.example.foodmanager.data.Units.DEFAULT },
                 )
             }

@@ -68,6 +68,9 @@ fun FoodsApp() {
     val effectiveEntryMode = entryMode ?: settings.lastEntryMode.ifBlank { "manual" }
     val customFoods by viewModel.customFoods.collectAsStateWithLifecycle()
 
+    // 「录入」页的界面状态放在这一层：切到其它标签页再回来，草稿与表单内容都不会丢
+    val scanState = remember { ScanEntryState() }
+
     Log.i("FoodsApp", "渲染 tab=$tab fullScreen=$fullScreen")
 
     Scaffold(
@@ -157,7 +160,7 @@ fun FoodsApp() {
                     )
 
                     2 -> ScanScreen(
-                        defaultLocation = settings.lastLocation.ifBlank { Locations.DEFAULT },
+                        state = scanState,
                         defaultUnit = settings.lastUnit.ifBlank { Units.DEFAULT },
                         customLocations = customLocations,
                         customFoods = customFoods,
