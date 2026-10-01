@@ -172,6 +172,7 @@ fun ManualInputCard(
                 value = item.category,
                 onValueChange = { v -> onChange(item.copy(category = v)) },
                 placeholder = "可留空，也可直接输入",
+                resetToken = resetToken,
             )
 
             Spacer(Modifier.height(10.dp))
@@ -186,6 +187,7 @@ fun ManualInputCard(
                 unitOptions = Units.ALL,
                 unit = item.unit,
                 onUnitChange = { v -> onChange(item.copy(unit = v)) },
+                resetToken = resetToken,
             )
 
             Spacer(Modifier.height(10.dp))
@@ -197,6 +199,7 @@ fun ManualInputCard(
                 value = item.location,
                 onValueChange = { v -> onChange(item.copy(location = v)) },
                 placeholder = "可直接输入，如：茶几底下",
+                resetToken = resetToken,
             )
             Spacer(Modifier.height(4.dp))
             Text(

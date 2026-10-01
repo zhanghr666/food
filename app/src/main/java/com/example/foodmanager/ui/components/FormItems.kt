@@ -50,8 +50,12 @@ import java.util.TimeZone
 /**
  * 可编辑的下拉框（组合框）：既能从常用项里选，也能直接输入自定义值。
  *
- * 用于「存放位置」这类既要有常用项、又允许自由填写的字段
- * （例如语音识别出「茶几底下」，或用户临时输入一个没存过的位置）。
+ * 用于「存放位置」「分类」这类既要有常用项、又允许自由填写的字段
+ * （例如语音识别出「茶几底下」，或用户临时输入「宝宝辅食」）。
+ *
+ * @param resetToken 父级每次清空/重置表单时 +1。
+ *   用来**强制关闭已展开的下拉并同步收起状态** —— 否则表单被清空时，
+ *   值从「主食」变成 `""` 会触发 onValueChange 而把下拉重新弹开，盖住整个页面。
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -63,8 +67,10 @@ fun ComboField(
     modifier: Modifier = Modifier,
     placeholder: String? = null,
     supportingText: String? = null,
+    resetToken: Int = 0,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    // resetToken 变化时重建状态（= 收起下拉）
+    var expanded by remember(resetToken) { mutableStateOf(false) }
     // 输入时过滤出匹配项，方便快速定位
     val filtered = remember(value, options) {
         if (value.isBlank()) options else options.filter { it.contains(value) }
@@ -78,8 +84,9 @@ fun ComboField(
         OutlinedTextField(
             value = value,
             onValueChange = {
+                // 只在"用户真的在输入"时展开：值为空说明是表单被清空，不要弹下拉
+                if (it.isNotBlank()) expanded = true
                 onValueChange(it)
-                expanded = true
             },
             label = { Text(label) },
             placeholder = placeholder?.let { { Text(it, style = MaterialTheme.typography.labelSmall) } },
@@ -126,8 +133,10 @@ fun DropdownField(
     onSelect: (String) -> Unit,
     modifier: Modifier = Modifier,
     supportingText: String? = null,
+    /** 父级重置表单时 +1，用于关闭可能还开着的下拉 */
+    resetToken: Int = 0,
 ) {
-    var expanded by remember { mutableStateOf(false) }
+    var expanded by remember(resetToken) { mutableStateOf(false) }
     ExposedDropdownMenuBox(
         expanded = expanded,
         onExpandedChange = { expanded = !expanded },
@@ -233,7 +242,7 @@ fun FormChipRow(
     }
 }
 
-/** 保证金 + 单位 一行 */
+/** 数量 + 单位 一行 */
 @Composable
 fun QuantityUnitRow(
     quantityText: String,
@@ -241,6 +250,7 @@ fun QuantityUnitRow(
     unitOptions: List<String>,
     unit: String,
     onUnitChange: (String) -> Unit,
+    resetToken: Int = 0,
 ) {
     Row(verticalAlignment = Alignment.CenterVertically) {
         OutlinedTextField(
@@ -259,6 +269,7 @@ fun QuantityUnitRow(
             labelOf = { it },
             onSelect = onUnitChange,
             modifier = Modifier.weight(1f),
+            resetToken = resetToken,
         )
     }
 }

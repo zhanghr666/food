@@ -20,6 +20,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
@@ -110,6 +112,9 @@ fun ScanScreen(
 
     // 键盘是否弹出：用于给滚动内容追加余量（见下面的 contentPadding）
     val imeVisible = WindowInsets.isImeVisible
+    // 保存后滚动回表单顶部用
+    val listState = rememberLazyListState()
+    val focusManager = LocalFocusManager.current
 
     // 手工录入的表单数据（受控）。位置不预填，由用户自己选或填。
     var manualDraft by remember { mutableStateOf(blankDraft(defaultUnit)) }
@@ -205,6 +210,7 @@ fun ScanScreen(
         snackbarHost = { SnackbarHost(snackbar) },
     ) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
@@ -309,12 +315,16 @@ fun ScanScreen(
                             onAddItems(listOf(toSave)) { count ->
                                 manualStatus = "已入库 $count 条：「${toSave.name}」"
                             }
-                            // 保存后：字段全清空 + 焦点回到名称框 + 表单内显示成功提示
+                            // ---------- 保存后的交互顺序 ----------
+                            // 1) 先收起键盘与焦点，避免残留的聚焦状态让下拉/菜单重新弹开
+                            keyboard?.hide()
+                            focusManager.clearFocus(force = true)
+                            // 2) 再清空表单；resetToken 变化会强制关闭所有已展开的下拉
                             manualDraft = blankDraft(defaultUnit)
                             manualResetToken++
                             manualStatus = "已保存「${toSave.name}」，可以继续录入下一条"
-                            nameFocus.requestFocus()
-                            keyboard?.show()
+                            // 3) 滚动回表单顶部，让用户看到提示 + 名称框
+                            scope.launch { listState.animateScrollToItem(0) }
                         },
                         customLocations = customLocations,
                         title = "手工录入",
