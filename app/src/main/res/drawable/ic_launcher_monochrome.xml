@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 单色图标（Android 13+ 主题图标）：用箱体外轮廓 + 叶子剪影 -->
+    <path
+        android:pathData="M34,44 L74,44 A5,5 0 0 1 79,49 L79,71 A5,5 0 0 1 74,76 L34,76 A5,5 0 0 1 29,71 L29,49 A5,5 0 0 1 34,44 Z M34,47 A2,2 0 0 0 32,49 L32,52 L76,52 L76,49 A2,2 0 0 0 74,47 Z" />
+    <path
+        android:pathData="M30,41.2 L30,36.2 A3.6,3.6 0 0 1 33.6,32.6 L74.4,32.6 A3.6,3.6 0 0 1 78,36.2 L78,41.2 Z" />
+    <path
+        android:pathData="M48,31.5 L49.6,27.4 L54,25.8 L49.6,24.2 L48,20.1 L46.4,24.2 L42,25.8 L46.4,27.4 Z" />
+    <path
+        android:pathData="M58.5,29 L59.7,26 L62.7,24.8 L59.7,23.6 L58.5,20.6 L57.3,23.6 L54.3,24.8 L57.3,26 Z" />
+</vector>

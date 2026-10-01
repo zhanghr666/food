@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:aapt="http://schemas.android.com/aapt"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 圆形图标专用：整体略微放大，保证圆形裁切后视觉饱满（仍留在安全区内） -->
+
+    <!-- 盖板 -->
+    <path
+        android:pathData="M29,40 L29,34.6 A4,4 0 0 1 33,30.6 L75,30.6 A4,4 0 0 1 79,34.6 L79,40 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="29" android:startY="30.6"
+                android:endX="79" android:endY="40"
+                android:type="linear">
+                <item android:color="#FFB4531A" android:offset="0" />
+                <item android:color="#FF8F3E10" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- 箱体 -->
+    <path
+        android:pathData="M33,43 L75,43 A5.5,5.5 0 0 1 80.5,48.5 L80.5,71.5 A5.5,5.5 0 0 1 75,77 L33,77 A5.5,5.5 0 0 1 27.5,71.5 L27.5,48.5 A5.5,5.5 0 0 1 33,43 Z">
+        <aapt:attr name="android:fillColor">
+            <gradient
+                android:startX="27.5" android:startY="43"
+                android:endX="80.5" android:endY="77"
+                android:type="linear">
+                <item android:color="#FFE8A33D" android:offset="0" />
+                <item android:color="#FFC9772A" android:offset="1" />
+            </gradient>
+        </aapt:attr>
+    </path>
+
+    <!-- 高光 -->
+    <path
+        android:pathData="M33,46 L75,46 A2.4,2.4 0 0 1 77.4,48.4 L77.4,50.6 L30.6,50.6 L30.6,48.4 A2.4,2.4 0 0 1 33,46 Z"
+        android:fillColor="#40FFFFFF" />
+
+    <!-- 下沿阴影 -->
+    <path
+        android:pathData="M27.5,69 L80.5,69 L80.5,71.5 A5.5,5.5 0 0 1 75,77 L33,77 A5.5,5.5 0 0 1 27.5,71.5 Z"
+        android:fillColor="#26000000" />
+
+    <!-- 箱体叶子标识（与方形图标同一套贝塞尔几何） -->
+    <path
+        android:pathData="M52,50.5 Q63.5,49.5 68.5,67 Q57,68 52,50.5 Z"
+        android:fillColor="#FF2E8B57" />
+    <path
+        android:pathData="M53.5,52 L66.5,65.5"
+        android:strokeColor="#FF1F6B41"
+        android:strokeWidth="1.2"
+        android:strokeLineCap="round" />
+
+    <!-- 顶部星形叶子 -->
+    <path
+        android:pathData="M48,30 L49.8,25.4 L54.6,23.6 L49.8,21.8 L48,17.2 L46.2,21.8 L41.4,23.6 L46.2,25.4 Z"
+        android:fillColor="#FF8FD6B0" />
+    <path
+        android:pathData="M59.5,27.6 L60.8,24.3 L64.1,23 L60.8,21.7 L59.5,18.4 L58.2,21.7 L54.9,23 L58.2,24.3 Z"
+        android:fillColor="#FFBFE9D2" />
+</vector>

@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<paths>
+    <!-- 拍照临时文件：cache/images/ -->
+    <cache-path
+        name="food_images"
+        path="images/" />
+</paths>
