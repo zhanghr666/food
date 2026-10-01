@@ -49,6 +49,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.foodmanager.data.AppSettings
+import com.example.foodmanager.data.FoodItem
 import com.example.foodmanager.notify.ExpiryReminderWorker
 import kotlinx.coroutines.launch
 
@@ -262,6 +263,8 @@ fun ArchivedScreen(
     onBack: () -> Unit,
 ) {
     val archived by viewModel.archived.collectAsStateWithLifecycle()
+    // 与库存页保持一致：删除前必须二次确认
+    var pendingDelete by remember { mutableStateOf<FoodItem?>(null) }
     Scaffold(
         topBar = {
             TopAppBar(
@@ -314,13 +317,31 @@ fun ArchivedScreen(
                         TextButton(onClick = { viewModel.setArchived(item.id, false) }) {
                             Text("恢复到库存")
                         }
-                        TextButton(onClick = { viewModel.delete(item.id) }) {
+                        TextButton(onClick = { pendingDelete = item }) {
                             Text("删除", color = MaterialTheme.colorScheme.error)
                         }
                     }
                 }
             }
         }
+    }
+
+    // 归档项的删除确认（与库存页行为一致）
+    pendingDelete?.let { target ->
+        AlertDialog(
+            onDismissRequest = { pendingDelete = null },
+            title = { Text("删除这条归档记录？") },
+            text = { Text("「${target.name}」将被永久删除，无法恢复。") },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.delete(target.id)
+                    pendingDelete = null
+                }) { Text("删除", color = MaterialTheme.colorScheme.error) }
+            },
+            dismissButton = {
+                TextButton(onClick = { pendingDelete = null }) { Text("取消") }
+            },
+        )
     }
 }
 

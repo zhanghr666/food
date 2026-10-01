@@ -49,7 +49,11 @@ import android.util.Log
 
 /** 主界面：4 个主页面用状态直接切换（不再走 NavHost，避免内容与底部栏不同步） */
 @Composable
-fun FoodsApp() {
+fun FoodsApp(
+    /** 从通知点进来时为 true：直接落到「首页」并高亮提醒清单 */
+    openAlertsOnStart: Boolean = false,
+    onOpenAlertsHandled: () -> Unit = {},
+) {
     val context = LocalContext.current
     val app = context.applicationContext as FoodApp
     val snackbar = remember { SnackbarHostState() }
@@ -70,6 +74,17 @@ fun FoodsApp() {
 
     // 「录入」页的界面状态放在这一层：切到其它标签页再回来，草稿与表单内容都不会丢
     val scanState = remember { ScanEntryState() }
+
+    // 从通知点进来：切到首页，让提醒清单可见
+    var highlightAlerts by remember { mutableStateOf(false) }
+    LaunchedEffect(openAlertsOnStart) {
+        if (openAlertsOnStart) {
+            tab = 0
+            fullScreen = null
+            highlightAlerts = true
+            onOpenAlertsHandled()
+        }
+    }
 
     Log.i("FoodsApp", "渲染 tab=$tab fullScreen=$fullScreen")
 
@@ -145,6 +160,8 @@ fun FoodsApp() {
                 null -> when (tab) {
                     0 -> HomeScreen(
                         viewModel = viewModel,
+                        highlightAlerts = highlightAlerts,
+                        onAlertsHighlighted = { highlightAlerts = false },
                         onOpenInventory = { tab = 1 },
                         onAddManual = { entryMode = "manual"; tab = 2 },
                         onOpenScan = { entryMode = "photo"; tab = 2 },

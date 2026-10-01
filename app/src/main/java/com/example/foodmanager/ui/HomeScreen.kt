@@ -16,6 +16,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
@@ -63,6 +64,9 @@ import com.example.foodmanager.ui.theme.StatusColors
 @Composable
 fun HomeScreen(
     viewModel: FoodViewModel,
+    /** 从通知点进来时为 true：把「需要尽快处理」清单滚到可见位置 */
+    highlightAlerts: Boolean = false,
+    onAlertsHighlighted: () -> Unit = {},
     onOpenInventory: () -> Unit,
     onAddManual: () -> Unit,
     onOpenScan: () -> Unit,
@@ -75,11 +79,21 @@ fun HomeScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val allItems by viewModel.items.collectAsStateWithLifecycle()
     var today by remember { mutableLongStateOf(DateUtils.today()) }
+    val listState = rememberLazyListState()
 
     LaunchedEffect(Unit) {
         Log.i("HomeScreen", "首页已渲染：记录数=${stats.total}")
         viewModel.refreshToday()
         today = DateUtils.today()
+    }
+
+    // 从通知进来：滚到提醒清单，让用户一眼看到"哪些快过期了"
+    LaunchedEffect(highlightAlerts) {
+        if (highlightAlerts) {
+            // 首页结构：0 提醒横幅/占位 · 1 统计行 · 2 快捷录入 · 3 清单标题 · 4+ 清单条目
+            listState.animateScrollToItem(3)
+            onAlertsHighlighted()
+        }
     }
 
     Scaffold(
@@ -99,6 +113,7 @@ fun HomeScreen(
         },
     ) { padding ->
         LazyColumn(
+            state = listState,
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
