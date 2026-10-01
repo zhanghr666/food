@@ -5,9 +5,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -40,7 +42,6 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.example.foodmanager.ui.EditorViewModel
-import com.example.foodmanager.ui.components.imeAwarePadding
 import com.example.foodmanager.ui.components.ManualInputCard
 import com.example.foodmanager.ui.components.PhotoInputCard
 import com.example.foodmanager.ui.components.VoiceInputCard
@@ -52,7 +53,7 @@ import com.example.foodmanager.voice.VoiceTextParser
  * 页面结构与「录入」页保持一致：顶部三个入口卡片（拍照 / 语音 / 手工），互斥展开，
  * 默认展开「手工录入」。从库存、首页、通知等任意入口进来都是同一套界面。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun EditorScreen(
     viewModel: EditorViewModel,
@@ -65,6 +66,8 @@ fun EditorScreen(
 ) {
     // 默认展开手工录入（编辑页的主要目的就是改字段）
     var mode by remember { mutableStateOf("manual") }
+    // 键盘是否弹出：用于给滚动内容追加余量
+    val imeVisible = WindowInsets.isImeVisible
     var lastBatchHint by remember { mutableStateOf("") }
 
     val item = viewModel.item
@@ -122,10 +125,15 @@ fun EditorScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding)
-                // 为键盘留出空间，否则表单底部的「备注」框会被输入法遮住
-                .imeAwarePadding()
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 12.dp, vertical = 8.dp),
+                .padding(
+                    start = 12.dp,
+                    end = 12.dp,
+                    top = 8.dp,
+                    // 键盘弹出时给滚动内容追加余量，否则最后的「备注」框滚不动、会被遮住。
+                    // 加在内容留白上而不是容器内边距，避免缩小视口露出背景色（白框）。
+                    bottom = if (imeVisible) 280.dp else 8.dp,
+                ),
         ) {
             // ---------- 三种录入方式入口（与「录入」页一致） ----------
             Row(

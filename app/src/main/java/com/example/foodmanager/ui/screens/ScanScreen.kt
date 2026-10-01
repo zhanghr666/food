@@ -10,9 +10,11 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.isImeVisible
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -71,7 +73,6 @@ import com.example.foodmanager.ui.components.ComboField
 import com.example.foodmanager.ui.components.DateFieldRow
 import com.example.foodmanager.ui.components.DropdownField
 import com.example.foodmanager.ui.components.FoodDatePickerDialog
-import com.example.foodmanager.ui.components.imeAwarePadding
 import com.example.foodmanager.ui.components.ManualInputCard
 import com.example.foodmanager.ui.components.PhotoInputCard
 import com.example.foodmanager.ui.components.VoiceInputCard
@@ -85,7 +86,7 @@ import kotlinx.coroutines.withContext
  * OCR 批量录入 + 语音批量录入。
  * 流程：拍照/选图 -> 离线识别 -> 解析成草稿 -> 逐条校对 -> 一键入库。
  */
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, androidx.compose.foundation.layout.ExperimentalLayoutApi::class)
 @Composable
 fun ScanScreen(
     defaultLocation: String,
@@ -106,6 +107,9 @@ fun ScanScreen(
     val photoExpanded = entryMode == "photo"
     val voiceExpanded = entryMode == "voice"
     val manualExpanded = entryMode == "manual"
+
+    // 键盘是否弹出：用于给滚动内容追加余量（见下面的 contentPadding）
+    val imeVisible = WindowInsets.isImeVisible
 
     // 手工录入的表单数据（受控）。位置不预填，由用户自己选或填。
     var manualDraft by remember { mutableStateOf(blankDraft(defaultUnit)) }
@@ -203,11 +207,18 @@ fun ScanScreen(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding)
-                // 为键盘留出空间：否则表单底部的「备注」框会被输入法永久遮住
-                // （它是列表最后一项，后面没有内容，列表滚不动）
-                .imeAwarePadding(),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(12.dp),
+                .padding(padding),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 12.dp,
+                end = 12.dp,
+                top = 12.dp,
+                // 键盘弹出时，在列表**内容**底部追加一段可滚动余量：
+                // 「备注」是最后一项，没有余量就滚不动，会被输入法永久遮住。
+                //
+                // 注意：这里加在 contentPadding（内容留白）而不是 Modifier.padding（容器内边距）。
+                // 后者会缩小视口、在键盘上方露出背景色 —— 就是用户看到的"白框"。
+                bottom = if (imeVisible) 280.dp else 12.dp,
+            ),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             // ---------- 三种录入方式入口：样式统一，点击互斥展开 ----------
