@@ -21,7 +21,7 @@ data class FoodDraft(
     val highlights: List<String> = emptyList(),
     /** 置信度 0..1，用于排序/提示 */
     val confidence: Float = 0.5f,
-) {
+) : java.io.Serializable {
     val isUsable: Boolean get() = name.isNotBlank() || expiryDate != null
 
     companion object {
@@ -29,6 +29,10 @@ data class FoodDraft(
 
         /** 单调递增的草稿 id（进程内唯一即可，草稿不落库） */
         fun nextId(): Long = idGen.incrementAndGet()
+
+        fun reserveIdsThrough(id: Long) {
+            idGen.updateAndGet { maxOf(it, id) }
+        }
     }
 }
 

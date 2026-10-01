@@ -76,7 +76,7 @@ fun SettingsScreen(
     val commonFoods by viewModel.commonFoods.collectAsStateWithLifecycle()
 
     // 每个位置被多少条**在库**记录使用（删除确认时提示用），随记录变化自动刷新
-    val allItems by viewModel.items.collectAsStateWithLifecycle()
+    val allItems by viewModel.allItems.collectAsStateWithLifecycle()
     val usageCounts = remember(allItems) {
         allItems.filter { !it.archived && it.location.isNotBlank() }
             .groupingBy { it.location }
@@ -105,12 +105,13 @@ fun SettingsScreen(
             ) {
                 SwitchRow(
                     title = "系统通知提醒",
-                    subtitle = "即使没有打开 App 也会收到通知",
+                    subtitle = "允许通知后可在后台检查，系统可能推迟提醒",
                     checked = settings.notifyEnabled,
                     onCheckedChange = { checked ->
                         viewModel.updateSettings { it.copy(notifyEnabled = checked) }
                     },
                 )
+                com.example.foodmanager.ui.components.NotificationPermissionCard()
                 SwitchRow(
                     title = "首页提醒横幅",
                     subtitle = "在 App 首页顶部显示需要处理的清单",
@@ -135,7 +136,7 @@ fun SettingsScreen(
 
                 Spacer(Modifier.height(6.dp))
                 Text(
-                    text = "每天提醒时间",
+                    text = "每天约在此时检查（可能延迟）",
                     style = MaterialTheme.typography.bodyMedium,
                     fontWeight = FontWeight.SemiBold,
                 )
@@ -232,7 +233,7 @@ fun SettingsScreen(
             SettingsSection(
                 icon = Icons.Filled.PrivacyTip,
                 title = "数据与隐私",
-                subtitle = "全部数据保存在本机 SQLite 数据库，不会上传网络",
+                subtitle = "识别与库存仅在本机运行，应用无联网权限，已关闭系统云备份。Android 12 及以上仅允许系统在换机时迁移食物数据库；较旧系统不自动备份。卸载前请注意本地数据无法保证恢复。",
             ) {
                 InfoRow("当前记录", "${stats.total} 件")
                 InfoRow("已归档（已用完/丢弃）", "${archived.size} 件")
@@ -265,7 +266,7 @@ fun SettingsScreen(
                             tint = MaterialTheme.colorScheme.error,
                         )
                         Spacer(Modifier.width(4.dp))
-                        Text("清空全部数据", color = MaterialTheme.colorScheme.error)
+                        Text("清空全部食物记录", color = MaterialTheme.colorScheme.error)
                     }
                 }
             }
@@ -291,7 +292,7 @@ fun SettingsScreen(
     if (showClearDialog) {
         AlertDialog(
             onDismissRequest = { showClearDialog = false },
-            title = { Text("清空全部数据？") },
+            title = { Text("清空全部食物记录？") },
             text = { Text("所有食物记录都会被删除，此操作不可撤销。") },
             confirmButton = {
                 TextButton(onClick = {

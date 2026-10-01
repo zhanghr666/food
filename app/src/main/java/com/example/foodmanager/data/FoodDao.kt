@@ -67,7 +67,7 @@ interface FoodDao {
     suspend fun insertAll(items: List<FoodItem>): List<Long>
 
     @Update
-    suspend fun update(item: FoodItem)
+    suspend fun update(item: FoodItem): Int
 
     @Upsert
     suspend fun upsert(item: FoodItem): Long
@@ -83,6 +83,9 @@ interface FoodDao {
 
     @Query("UPDATE food_items SET quantity = :quantity, updatedAt = :updatedAt WHERE id = :id")
     suspend fun updateQuantity(id: Long, quantity: Double, updatedAt: Long = System.currentTimeMillis())
+
+    @Query("UPDATE food_items SET quantity = MAX(0, quantity + :delta), updatedAt = :updatedAt WHERE id = :id")
+    suspend fun incrementQuantity(id: Long, delta: Double, updatedAt: Long = System.currentTimeMillis())
 
     @Query("DELETE FROM food_items")
     suspend fun clearAll()

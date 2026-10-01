@@ -21,7 +21,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.activity.compose.BackHandler
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
@@ -59,6 +61,8 @@ fun FoodsApp(
     val scope = rememberCoroutineScope()
 
     val viewModel: FoodViewModel = viewModel(factory = FoodViewModel.factory(app.repository))
+    val editorViewModel: EditorViewModel = viewModel(factory = EditorViewModel.factory(app.repository))
+    DateRefreshEffect(viewModel)
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val customLocations by viewModel.customLocations.collectAsStateWithLifecycle()
 
@@ -79,19 +83,47 @@ fun FoodsApp(
     val ocrSingleItem by viewModel.ocrSingleItem.collectAsStateWithLifecycle()
 
     // 「录入」页的界面状态放在这一层：切到其它标签页再回来，草稿与表单内容都不会丢
-    val scanState = remember { ScanEntryState() }
+    val scanState = viewModel.scanState
 
     // 从通知点进来：切到首页，让提醒清单可见
+    var confirmNotificationNavigation by remember { mutableStateOf(false) }
     var highlightAlerts by remember { mutableStateOf(false) }
-    LaunchedEffect(openAlertsOnStart) {
-        if (openAlertsOnStart) {
-            tab = 0
+    BackHandler(enabled = fullScreen == FullScreen.Archived) { fullScreen = null }
+    LaunchedEffect(fullScreen) {
+        (fullScreen as? FullScreen.Editor)?.let { editorViewModel.beginSession(it.itemId, it.session) }
+    }
+    LaunchedEffect(openAlertsOnStart, editorViewModel.saving) {
+        if (openAlertsOnStart && !editorViewModel.saving) {
+            if (fullScreen is FullScreen.Editor && editorViewModel.hasChanges) {
+                confirmNotificationNavigation = true
+                return@LaunchedEffect
+            }
+            editorViewModel.endSession()
             fullScreen = null
+            tab = 0
             highlightAlerts = true
             onOpenAlertsHandled()
         }
     }
 
+    if (confirmNotificationNavigation) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { confirmNotificationNavigation = false; onOpenAlertsHandled() },
+            title = { Text("先查看提醒清单？") },
+            text = { Text("当前有未保存的修改。可继续编辑，或放弃修改后查看提醒。") },
+            confirmButton = { androidx.compose.material3.TextButton(onClick = {
+                confirmNotificationNavigation = false
+                editorViewModel.endSession()
+                fullScreen = null
+                tab = 0
+                highlightAlerts = true
+                onOpenAlertsHandled()
+            }) { Text("放弃修改并查看") } },
+            dismissButton = { androidx.compose.material3.TextButton(onClick = {
+                confirmNotificationNavigation = false; onOpenAlertsHandled()
+            }) { Text("继续编辑") } },
+        )
+    }
     Scaffold(
         // Scaffold 默认底色是 surface（近白 #FFFBFF），与页面米色背景（background）不一致：
         // 内容不足一屏时（例如键盘弹出把内容顶起），会露出一块近白色，看起来像"白框"。
@@ -139,25 +171,23 @@ fun FoodsApp(
                 )
 
                 is FullScreen.Editor -> {
-                    val itemId = (fullScreen as FullScreen.Editor).itemId
-                    val editorViewModel: EditorViewModel = viewModel(
-                        key = "editor-$itemId",
-                        factory = EditorViewModel.factory(app.repository, itemId),
-                    )
-                    EditorScreen(
+                    val screen = fullScreen as FullScreen.Editor
+                    key(screen.session) {
+                    if (editorViewModel.sessionId == screen.session) EditorScreen(
                         viewModel = editorViewModel,
                         customLocations = customLocations,
                         customFoods = customFoods,
                         locationAliases = locationAliasMap,
                         foodAliases = foodAliasMap,
-                        onBack = { fullScreen = null },
+                        onBack = { editorViewModel.endSession(); fullScreen = null },
                         onSaved = {
-                            ExpiryReminderWorker.runNow(context)
                             scope.launch { snackbar.showSnackbar("已保存到本地库存") }
+                            editorViewModel.endSession()
                             fullScreen = null
                             viewModel.refreshToday()
                         },
                     )
+                    }
                 }
 
                 null -> when (tab) {
@@ -210,34 +240,6 @@ fun FoodsApp(
         ExpiryReminderWorker.runNow(context)
     }
 }
-
-/** 全屏子页面 */
-private sealed interface FullScreen {
-    data object Archived : FullScreen
-    data class Editor(val itemId: Long) : FullScreen
-}
-
-/**
- * [FullScreen] 的保存/恢复器。
- *
- * 保存形式：`0` 表示归档页；正数表示「正在编辑的食物 id」。
- */
-private val FullScreenSaver: Saver<FullScreen?, Long> = Saver(
-    save = { screen ->
-        when (screen) {
-            null -> -1L
-            FullScreen.Archived -> 0L
-            is FullScreen.Editor -> screen.itemId
-        }
-    },
-    restore = { value ->
-        when {
-            value < 0L -> null
-            value == 0L -> FullScreen.Archived
-            else -> FullScreen.Editor(value)
-        }
-    },
-)
 
 private data class BottomTab(
     val label: String,

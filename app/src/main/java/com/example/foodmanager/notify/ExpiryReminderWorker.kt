@@ -15,7 +15,7 @@ import java.util.concurrent.TimeUnit
 
 /**
  * 后台定时检查临期 / 过期食物并发出通知。
- * 使用 WorkManager：即使 App 没打开也能收到提醒（至少一天一次）。
+ * 使用 WorkManager 定期检查；系统省电策略可能推迟执行，不保证整点送达。
  */
 class ExpiryReminderWorker(
     appContext: Context,

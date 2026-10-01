@@ -4,6 +4,8 @@ import android.Manifest
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import androidx.compose.runtime.getValue
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -21,22 +23,18 @@ class MainActivity : ComponentActivity() {
      */
     private val openAlerts = MutableStateFlow(false)
 
-    /** 支持从通知点击后直接跳到 App（首页会显示提醒清单） */
-    private val permissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestMultiplePermissions()
-    ) { }
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
-        requestStartupPermissions()
+
 
         consumeOpenAlerts(intent)
 
         setContent {
+            val shouldOpenAlerts by openAlerts.collectAsStateWithLifecycle()
             FoodManagerTheme {
                 FoodsApp(
-                    openAlertsOnStart = openAlerts.value,
+                    openAlertsOnStart = shouldOpenAlerts,
                     onOpenAlertsHandled = { openAlerts.value = false },
                 )
             }
@@ -56,25 +54,7 @@ class MainActivity : ComponentActivity() {
     private fun consumeOpenAlerts(intent: Intent?) {
         if (intent?.getBooleanExtra(EXTRA_OPEN_ALERTS, false) == true) {
             openAlerts.value = true
-        }
-    }
-
-    /** App 启动时申请必要权限：麦克风（语音录入）与通知（过期提醒） */
-    private fun requestStartupPermissions() {
-        val wanted = mutableListOf<String>()
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO)
-            != android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            wanted += Manifest.permission.RECORD_AUDIO
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
-            != android.content.pm.PackageManager.PERMISSION_GRANTED
-        ) {
-            wanted += Manifest.permission.POST_NOTIFICATIONS
-        }
-        if (wanted.isNotEmpty()) {
-            runCatching { permissionLauncher.launch(wanted.toTypedArray()) }
+            intent.removeExtra(EXTRA_OPEN_ALERTS)
         }
     }
 

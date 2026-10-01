@@ -76,20 +76,18 @@ fun HomeScreen(
     val stats by viewModel.stats.collectAsStateWithLifecycle()
     val alerts by viewModel.alerts.collectAsStateWithLifecycle()
     val settings by viewModel.settings.collectAsStateWithLifecycle()
-    val allItems by viewModel.items.collectAsStateWithLifecycle()
-    var today by remember { mutableLongStateOf(DateUtils.today()) }
+    val allItems by viewModel.allItems.collectAsStateWithLifecycle()
+    val today by viewModel.today.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
     LaunchedEffect(Unit) {
         viewModel.refreshToday()
-        today = DateUtils.today()
     }
 
     // 从通知进来：滚到提醒清单，让用户一眼看到"哪些快过期了"
-    LaunchedEffect(highlightAlerts) {
-        if (highlightAlerts) {
-            // 首页结构：0 提醒横幅/占位 · 1 统计行 · 2 快捷录入 · 3 清单标题 · 4+ 清单条目
-            listState.animateScrollToItem(3)
+    LaunchedEffect(highlightAlerts, alerts, settings.homeBannerEnabled) {
+        if (highlightAlerts && alerts.isNotEmpty()) {
+            listState.animateScrollToItem(if (settings.homeBannerEnabled) 3 else 2)
             onAlertsHighlighted()
         }
     }
@@ -128,7 +126,7 @@ fun HomeScreen(
                         onClick = onOpenInventory,
                     )
                 }
-            } else if (stats.total > 0) {
+            } else if (stats.total > 0 && alerts.isEmpty()) {
                 item {
                     Card(
                         modifier = Modifier

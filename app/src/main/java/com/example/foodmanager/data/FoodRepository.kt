@@ -8,6 +8,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 
 /** 首页统计信息 */
 data class FoodStats(
@@ -27,6 +29,7 @@ class FoodRepository(
     private val storageLocationDao: StorageLocationDao,
     private val commonFoodDao: CommonFoodDao,
     private val appContext: android.content.Context,
+    private val todayProvider: () -> Long = DateUtils::today,
 ) {
 
     /** 用于调度后台提醒任务 */
@@ -41,16 +44,18 @@ class FoodRepository(
     val commonFoods: Flow<List<CommonFood>> = commonFoodDao.observeAll()
 
     private val settingsCache = MutableStateFlow(AppSettings.DEFAULT)
+    private val settingsMutex = Mutex()
     val currentSettings: StateFlow<AppSettings> = settingsCache.asStateFlow()
 
     /** 当天的 0 点，用于状态计算（跨天时由 UI 重新采集） */
-    private val todayFlow = MutableStateFlow(DateUtils.today())
+    private val todayFlow = MutableStateFlow(todayProvider())
+    val today: StateFlow<Long> = todayFlow.asStateFlow()
 
     fun refreshToday() {
-        todayFlow.value = DateUtils.today()
+        todayFlow.value = todayProvider()
     }
 
-    val allItems: Flow<List<FoodItem>> = combine(foodDao.observeAll(), settings) { list, _ -> list }
+    val allItems: Flow<List<FoodItem>> = foodDao.observeAll()
 
     fun search(query: String, location: String = ""): Flow<List<FoodItem>> =
         foodDao.observeFiltered(query.trim(), location)
@@ -58,12 +63,11 @@ class FoodRepository(
     val archivedItems: Flow<List<FoodItem>> = foodDao.observeArchived()
 
     /** 带实时状态的列表：随设置中的预警天数变化而重新计算 */
-    val itemsWithStatus: Flow<List<FoodItem>> = combine(allItems, settings) { list, s ->
-        list.sortedWith(statusComparator(s.warnDays))
+    val itemsWithStatus: Flow<List<FoodItem>> = combine(allItems, settings, todayFlow) { list, s, today ->
+        list.sortedWith(statusComparator(s.warnDays, today))
     }
 
-    val stats: Flow<FoodStats> = combine(allItems, settings) { list, s ->
-        val today = DateUtils.today()
+    val stats: Flow<FoodStats> = combine(allItems, settings, todayFlow) { list, s, today ->
         var expired = 0
         var soon = 0
         var fresh = 0
@@ -88,17 +92,20 @@ class FoodRepository(
     }
 
     /** 首页提醒用：已过期 + 即将过期，按紧急程度排序 */
-    val alertItems: Flow<List<FoodItem>> = combine(allItems, settings) { list, s ->
-        val today = DateUtils.today()
+    val alertItems: Flow<List<FoodItem>> = combine(allItems, settings, todayFlow) { list, s, today ->
         list.filter {
             val st = it.status(today, s.warnDays)
             st == FoodStatus.EXPIRED || st == FoodStatus.EXPIRING_SOON
-        }.sortedWith(statusComparator(s.warnDays))
+        }.sortedWith(statusComparator(s.warnDays, today))
     }
 
     val locations: Flow<List<String>> = foodDao.observeLocations()
 
-    suspend fun loadSettings(): AppSettings {
+    suspend fun loadSettings(): AppSettings = settingsMutex.withLock {
+        loadSettingsUnlocked().also { settingsCache.value = it }
+    }
+
+    private suspend fun loadSettingsUnlocked(): AppSettings {
         val stored = settingsDao.get()
         if (stored == null) {
             // 全新安装：先播种默认位置，再写设置行（并把初始化标记置上）
@@ -173,10 +180,10 @@ class FoodRepository(
         settingsCache.value = settings
     }
 
-    suspend fun updateSettings(block: (AppSettings) -> AppSettings): AppSettings {
-        val updated = block(settingsDao.get() ?: AppSettings.DEFAULT)
+    suspend fun updateSettings(block: (AppSettings) -> AppSettings): AppSettings = settingsMutex.withLock {
+        val updated = block(loadSettingsUnlocked())
         saveSettings(updated)
-        return updated
+        updated
     }
 
     suspend fun get(id: Long): FoodItem? = foodDao.findById(id)
@@ -188,7 +195,7 @@ class FoodRepository(
 
     suspend fun update(item: FoodItem): FoodItem {
         val updated = item.copy(updatedAt = System.currentTimeMillis())
-        foodDao.update(updated)
+        check(foodDao.update(updated) == 1) { "记录已被删除，无法保存修改" }
         return updated
     }
 
@@ -196,25 +203,21 @@ class FoodRepository(
 
     suspend fun setArchived(id: Long, archived: Boolean) = foodDao.setArchived(id, archived)
 
-    suspend fun changeQuantity(id: Long, delta: Double) {
-        val item = foodDao.findById(id) ?: return
-        val next = (item.quantity + delta).coerceAtLeast(0.0)
-        foodDao.updateQuantity(id, next)
-    }
+    suspend fun changeQuantity(id: Long, delta: Double) = foodDao.incrementQuantity(id, delta)
 
     suspend fun clearAll() = foodDao.clearAll()
 
     /** 供后台任务使用：一次性取出需要提醒的条目 */
     suspend fun loadAlertItems(warnDays: Int): List<FoodItem> {
-        val today = DateUtils.today()
+        val today = todayProvider()
         return foodDao.expiringBy(DateUtils.plusDays(today, warnDays))
-            .sortedWith(statusComparator(warnDays))
+            .sortedWith(statusComparator(warnDays, today))
     }
 
-    private fun statusComparator(warnDays: Int): Comparator<FoodItem> =
+    private fun statusComparator(warnDays: Int, today: Long): Comparator<FoodItem> =
         compareBy<FoodItem> { item ->
             // 已过期排最前，其次即将过期，再是无保质期
-            when (item.status(DateUtils.today(), warnDays)) {
+            when (item.status(today, warnDays)) {
                 FoodStatus.EXPIRED -> 0
                 FoodStatus.EXPIRING_SOON -> 1
                 FoodStatus.FRESH -> 2

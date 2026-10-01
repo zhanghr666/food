@@ -50,11 +50,11 @@ data class FoodItem(
 
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
-) {
+) : java.io.Serializable {
     /** 距离过期还有多少天：正数=还剩，0=今天到期，负数=已过期；无保质期返回 null */
     fun daysToExpiry(today: Long = DateUtils.today()): Long? {
         val expiry = expiryDate ?: return null
-        return TimeUnit.MILLISECONDS.toDays(expiry - today)
+        return DateUtils.daysBetween(today, expiry)
     }
 
     /** 保质期总天数（生产日期 -> 过期日期），信息不足返回 null */
@@ -62,7 +62,7 @@ data class FoodItem(
         get() {
             val p = productionDate ?: return null
             val e = expiryDate ?: return null
-            return TimeUnit.MILLISECONDS.toDays(e - p)
+            return DateUtils.daysBetween(p, e)
         }
 
     fun status(today: Long = DateUtils.today(), warnDays: Int = DEFAULT_WARN_DAYS): FoodStatus {

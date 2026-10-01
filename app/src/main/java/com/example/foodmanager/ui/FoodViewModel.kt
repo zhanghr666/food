@@ -4,6 +4,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.SavedStateHandle
+import androidx.lifecycle.createSavedStateHandle
+import androidx.lifecycle.viewmodel.initializer
+import androidx.lifecycle.viewmodel.viewModelFactory
+import android.os.Bundle
+import kotlinx.coroutines.CancellationException
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.viewModelScope
 import com.example.foodmanager.data.AppSettings
@@ -24,7 +30,16 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** 全局共享的 ViewModel：库存列表、统计、提醒、设置 */
-class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
+class FoodViewModel(
+    private val repository: FoodRepository,
+    private val savedState: SavedStateHandle = SavedStateHandle(),
+) : ViewModel() {
+    val today = repository.today
+    val allItems = repository.allItems.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+    @Suppress("DEPRECATION")
+    val scanState = ScanEntryState.restore(
+        savedState.get<Bundle>("scan")?.getSerializable("snapshot") as? ScanEntryState.Snapshot,
+    )
 
     private val _query = MutableStateFlow("")
     val query: StateFlow<String> = _query.asStateFlow()
@@ -33,7 +48,7 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
     val locationFilter: StateFlow<String> = _locationFilter.asStateFlow()
 
     val items: StateFlow<List<FoodItem>> =
-        combine(repository.allItems, _query, _locationFilter) { list, q, loc ->
+        combine(repository.itemsWithStatus, _query, _locationFilter) { list, q, loc ->
             list.filter { item ->
                 val matchQuery = q.isBlank() || listOf(item.name, item.category, item.location, item.note)
                     .any { it.contains(q, ignoreCase = true) }
@@ -115,7 +130,10 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
         repository.archivedItems.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     init {
-        viewModelScope.launch { repository.saveSettings(repository.loadSettings()) }
+        savedState.setSavedStateProvider("scan") {
+            Bundle().apply { putSerializable("snapshot", scanState.snapshot()) }
+        }
+        viewModelScope.launch { repository.loadSettings() }
     }
 
     fun onQueryChange(value: String) {
@@ -130,53 +148,37 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
 
     suspend fun get(id: Long): FoodItem? = repository.get(id)
 
-    fun save(item: FoodItem, onDone: (Long) -> Unit = {}) {
+    /** 回调只有在数据库写入完成后触发；失败时保留所有草稿。 */
+    fun addDrafts(items: List<FoodItem>, onDone: (Result<Int>) -> Unit) {
+        if (scanState.saving || items.isEmpty()) return
+        scanState.saving = true
+        val snapshot = items.toList()
         viewModelScope.launch {
-            // 「上次使用的位置/单位」只作为**记忆**保留，不再自动套用到新录入上
-            // （之前由 reuseLastLocation 开关控制，已按需求移除该开关）
-            val settings = repository.loadSettings()
-            val nextLocation = item.location.ifBlank { settings.lastLocation }
-            if (nextLocation != settings.lastLocation || item.unit != settings.lastUnit) {
-                repository.saveSettings(
-                    settings.copy(lastLocation = nextLocation, lastUnit = item.unit),
-                )
+            val result = try {
+                repository.addAll(snapshot)
+                Result.success(snapshot.size)
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                Result.failure(error)
+            } finally {
+                scanState.saving = false
             }
-            if (item.id == 0L) {
-                onDone(repository.add(item))
-            } else {
-                repository.update(item)
-                onDone(item.id)
+            onDone(result)
+            if (result.isSuccess) {
+                // 提醒调度不是写库成功的前置条件，不能导致用户重试重复入库。
+                runCatching { ExpiryReminderWorker.runNow(repository.appContext()) }
+                runCatching { repository.updateSettings { it.copy(lastUnit = snapshot.last().unit) } }
             }
-            ExpiryReminderWorker.runNow(repository.appContext())
-        }
-    }
-
-    fun addDrafts(items: List<FoodItem>, onDone: (Int) -> Unit = {}) {
-        viewModelScope.launch {
-            val settings = repository.loadSettings()
-            // 只记录"本次用到的位置/单位"供下次参考，**不**回填到位置为空的条目上
-            val usedLocation = items.firstOrNull { it.location.isNotBlank() }?.location
-            val usedUnit = items.firstOrNull()?.unit
-            if (usedLocation != null || usedUnit != null) {
-                repository.saveSettings(
-                    settings.copy(
-                        lastLocation = usedLocation ?: settings.lastLocation,
-                        lastUnit = usedUnit ?: settings.lastUnit,
-                    ),
-                )
-            }
-            repository.addAll(items)
-            onDone(items.size)
-            ExpiryReminderWorker.runNow(repository.appContext())
         }
     }
 
     fun delete(id: Long) {
-        viewModelScope.launch { repository.delete(id) }
+        viewModelScope.launch { repository.delete(id); ExpiryReminderWorker.runNow(repository.appContext()) }
     }
 
     fun setArchived(id: Long, archived: Boolean) {
-        viewModelScope.launch { repository.setArchived(id, archived) }
+        viewModelScope.launch { repository.setArchived(id, archived); ExpiryReminderWorker.runNow(repository.appContext()) }
     }
 
     fun changeQuantity(id: Long, delta: Double) {
@@ -191,6 +193,7 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
                 ExpiryReminderWorker.schedule(app, updated.notifyHour)
             } else {
                 ExpiryReminderWorker.cancel(app)
+                com.example.foodmanager.notify.FoodNotifier.cancelAll(app)
             }
         }
     }
@@ -251,6 +254,7 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
     fun clearAll(onDone: () -> Unit = {}) {
         viewModelScope.launch {
             repository.clearAll()
+            com.example.foodmanager.notify.FoodNotifier.cancelAll(repository.appContext())
             onDone()
         }
     }
@@ -264,74 +268,8 @@ class FoodViewModel(private val repository: FoodRepository) : ViewModel() {
          */
         const val MAX_CUSTOM_ITEMS = 20
 
-        fun factory(repository: FoodRepository): ViewModelProvider.Factory =
-            object : ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    FoodViewModel(repository) as T
-            }
-    }
-}
-
-/** 单条记录编辑（新增 / 修改） */
-class EditorViewModel(
-    private val repository: FoodRepository,
-    private val editingId: Long,
-) : ViewModel() {
-
-    var item: FoodItem by mutableStateOf(FoodItem(name = ""))
-        private set
-
-    var loaded: Boolean by mutableStateOf(editingId == 0L)
-        private set
-
-    val isEditing: Boolean get() = editingId != 0L
-
-    init {
-        viewModelScope.launch {
-            if (editingId != 0L) {
-                repository.get(editingId)?.let { item = it }
-            } else {
-                val settings = repository.loadSettings()
-                item = FoodItem(
-                    name = "",
-                    // 存放位置刻意不预填（与录入页一致）：由用户自己选或自己填，
-                    // 保存时会有"未填位置"的确认提醒。
-                    location = "",
-                    unit = settings.lastUnit.ifBlank { com.example.foodmanager.data.Units.DEFAULT },
-                )
-            }
-            loaded = true
+        fun factory(repository: FoodRepository): ViewModelProvider.Factory = viewModelFactory {
+            initializer { FoodViewModel(repository, createSavedStateHandle()) }
         }
-    }
-
-    fun update(block: (FoodItem) -> FoodItem) {
-        item = block(item)
-    }
-
-    fun save(onDone: (Long) -> Unit) {
-        viewModelScope.launch {
-            val settings = repository.loadSettings()
-            repository.saveSettings(
-                settings.copy(
-                    lastLocation = item.location.ifBlank { settings.lastLocation },
-                    lastUnit = item.unit.ifBlank { settings.lastUnit },
-                )
-            )
-            val id = if (item.id == 0L) repository.add(item) else {
-                repository.update(item)
-                item.id
-            }
-            onDone(id)
-        }
-    }
-
-    companion object {
-        fun factory(repository: FoodRepository, editingId: Long): ViewModelProvider.Factory =
-            object : ViewModelProvider.Factory {
-                @Suppress("UNCHECKED_CAST")
-                override fun <T : ViewModel> create(modelClass: Class<T>): T =
-                    EditorViewModel(repository, editingId) as T
-            }
     }
 }

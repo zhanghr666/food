@@ -57,7 +57,7 @@ object FoodNotifier {
 
     /** 发送提醒。返回实际发出的通知条数，便于 Worker 打印日志。 */
     fun notifyReminders(context: Context, items: List<FoodItem>, warnDays: Int): Int {
-        if (items.isEmpty()) return 0
+        if (items.isEmpty()) { cancelAll(context); return 0 }
         ensureChannels(context)
 
         val today = DateUtils.today()
@@ -68,6 +68,9 @@ object FoodNotifier {
         }
 
         var sent = 0
+        val manager = NotificationManagerCompat.from(context)
+        if (expired.isEmpty()) manager.cancel(NOTIFICATION_ID_EXPIRED)
+        if (expiring.isEmpty()) manager.cancel(NOTIFICATION_ID_EXPIRING)
         if (expired.isNotEmpty()) {
             sent += post(
                 context = context,

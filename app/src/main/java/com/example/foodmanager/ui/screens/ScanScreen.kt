@@ -99,7 +99,7 @@ fun ScanScreen(
     /** 当前展开的方式：photo / voice / manual（由上层持有，便于首页快捷入口指定） */
     entryMode: String = "manual",
     onEntryModeChange: (String) -> Unit = {},
-    onAddItems: (List<FoodItem>, (Int) -> Unit) -> Unit,
+    onAddItems: (List<FoodItem>, (Result<Int>) -> Unit) -> Unit,
 ) {
     val scope = rememberCoroutineScope()
     val snackbar = remember { SnackbarHostState() }
@@ -118,15 +118,25 @@ fun ScanScreen(
     val nameFocus = remember { FocusRequester() }
     val keyboard = LocalSoftwareKeyboardController.current
 
+    var showClearConfirm by remember { mutableStateOf(false) }
     val drafts = state.drafts
     var showRaw by remember { mutableStateOf(false) }
-    var statusText by remember { mutableStateOf("") }
+    var statusText by state::saveMessage
 
     // 进入录入页时兜底清理拍照残留（正常流程会在识别后立即删除）
     LaunchedEffect(Unit) {
         withContext(Dispatchers.IO) { CameraFiles.cleanUpStale(context) }
     }
 
+    if (showClearConfirm) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { showClearConfirm = false },
+            title = { Text("清空待入库草稿？") },
+            text = { Text("已入库记录不会受影响，未入库草稿将被移除。") },
+            confirmButton = { TextButton(onClick = { drafts.clear(); showClearConfirm = false }) { Text("清空") } },
+            dismissButton = { TextButton(onClick = { showClearConfirm = false }) { Text("取消") } },
+        )
+    }
     Scaffold(
         topBar = { TopAppBar(title = { Text("录入食物") }) },
         // 与主框架统一底色，避免内容不足一屏时露出近白色块（"白框"）
@@ -189,6 +199,7 @@ fun ScanScreen(
                     PhotoInputCard(
                         title = "拍照录入",
                         singleItemMode = ocrSingleItem,
+                        customFoods = customFoods,
                         onRecognized = { text, parsed ->
                             state.rawText = text
                             state.recordOcrResult(parsed.size, ocrSingleItem)
@@ -247,7 +258,7 @@ fun ScanScreen(
                     val form = state.manual
                     ManualInputCard(
                         item = form.item,
-                        onChange = { form.update(it) },
+                        onChange = { if (!state.saving) form.update(it) },
                         onSave = {
                             val toSave = form.item
                             if (toSave.location.isBlank()) {
@@ -259,23 +270,24 @@ fun ScanScreen(
                                 scope.launch { listState.animateScrollToItem(0) }
                                 return@ManualInputCard
                             }
-                            onAddItems(listOf(toSave)) { count ->
-                                form.setStatus("已入库 $count 条：「${toSave.name}」")
+                            if (state.saving) return@ManualInputCard
+                            onAddItems(listOf(toSave)) { result ->
+                                result.onSuccess {
+                                    keyboard?.hide()
+                                    focusManager.clearFocus(force = true)
+                                    if (form.item == toSave) state.resetManual(defaultUnit)
+                                    form.setStatus("已保存「${toSave.name}」，可以继续录入下一条")
+                                    scope.launch { listState.animateScrollToItem(0) }
+                                }.onFailure {
+                                    form.setStatus("保存失败，内容已保留，请检查存储空间后重试", isError = true)
+                                }
                             }
-                            // ---------- 保存后的交互顺序 ----------
-                            // 1) 先收起键盘与焦点，避免残留的聚焦状态让下拉/菜单重新弹开
-                            keyboard?.hide()
-                            focusManager.clearFocus(force = true)
-                            // 2) 再清空表单；resetToken 变化会强制关闭所有已展开的下拉
-                            state.resetManual(defaultUnit)
-                            form.setStatus("已保存「${toSave.name}」，可以继续录入下一条")
-                            // 3) 滚动回表单顶部，让用户看到提示 + 名称框
-                            scope.launch { listState.animateScrollToItem(0) }
                         },
                         customLocations = customLocations,
                         title = "手工录入",
                         subtitle = "逐项填写食物信息，填完点下方按钮保存",
                         saveLabel = "保存并继续录入",
+                        saving = state.saving,
                         showAddIcon = true,
                         nameFocusRequester = nameFocus,
                         resetToken = state.manualResetToken,
@@ -331,7 +343,7 @@ fun ScanScreen(
                             style = MaterialTheme.typography.titleMedium,
                             modifier = Modifier.weight(1f),
                         )
-                        TextButton(onClick = { drafts.clear() }) { Text("清空") }
+                        TextButton(enabled = !state.saving, onClick = { showClearConfirm = true }) { Text("清空") }
                     }
                 }
 
@@ -344,17 +356,20 @@ fun ScanScreen(
                         customLocations = customLocations,
                         onUpdate = { updated ->
                             val i = drafts.indexOfFirst { it.draftId == updated.draftId }
-                            if (i >= 0) drafts[i] = updated
+                            if (i >= 0 && !state.saving) drafts[i] = updated
                         },
                         onRemove = {
                             drafts.removeAll { it.draftId == draft.draftId }
                         },
+                        saving = state.saving,
                         onAddSingle = {
                             // 位置留空就存空（不套用"最近位置"，见 toFoodItem 的说明）
                             val item = draft.toFoodItem(defaultUnit)
-                            onAddItems(listOf(item)) { count ->
-                                drafts.removeAll { it.draftId == draft.draftId }
-                                statusText = "已单独入库 $count 条：「${item.name}」"
+                            onAddItems(listOf(item)) { result ->
+                                result.onSuccess { count ->
+                                    drafts.removeAll { it.draftId == draft.draftId }
+                                    statusText = "已单独入库 $count 条：「${item.name}」"
+                                }.onFailure { statusText = "入库失败，草稿已保留，请重试" }
                             }
                         },
                     )
@@ -362,12 +377,16 @@ fun ScanScreen(
 
                 item {
                     Button(
+                        enabled = !state.saving,
                         onClick = {
                             // 位置留空就存空，不用统一的 pendingLocation 覆盖每条草稿
+                            val submittedIds = drafts.map { it.draftId }.toSet()
                             val items = drafts.map { it.toFoodItem(defaultUnit) }
-                            onAddItems(items) { count ->
-                                drafts.clear()
-                                statusText = "已入库 $count 条食物"
+                            onAddItems(items) { result ->
+                                result.onSuccess { count ->
+                                    drafts.removeAll { it.draftId in submittedIds }
+                                    statusText = "已入库 $count 条食物"
+                                }.onFailure { statusText = "入库失败，草稿已保留，请重试" }
                             }
                         },
                         modifier = Modifier
@@ -454,6 +473,7 @@ private fun DraftCard(
     onUpdate: (FoodDraft) -> Unit,
     onRemove: () -> Unit,
     onAddSingle: () -> Unit,
+    saving: Boolean = false,
 ) {
     var editing by remember { mutableStateOf(false) }
     var dateTarget by remember { mutableStateOf<String?>(null) }
@@ -586,6 +606,7 @@ private fun DraftCard(
                 // 单条入库：不用等其它条目一起提交
                 androidx.compose.material3.FilledTonalButton(
                     onClick = onAddSingle,
+                    enabled = !saving,
                     modifier = Modifier.height(36.dp),
                 ) {
                     Icon(Icons.Filled.Check, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -593,12 +614,12 @@ private fun DraftCard(
                     Text("单条入库", style = MaterialTheme.typography.labelSmall)
                 }
                 Spacer(Modifier.weight(1f))
-                TextButton(onClick = { editing = !editing }) {
+                TextButton(enabled = !saving, onClick = { editing = !editing }) {
                     Icon(Icons.Filled.Edit, contentDescription = null, modifier = Modifier.size(16.dp))
                     Spacer(Modifier.width(4.dp))
                     Text(if (editing) "完成" else "修改")
                 }
-                TextButton(onClick = onRemove) {
+                TextButton(enabled = !saving, onClick = onRemove) {
                     Icon(
                         Icons.Filled.Delete,
                         contentDescription = null,

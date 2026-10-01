@@ -2,6 +2,9 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
+    <!-- 阻止识别库的传递依赖重新引入网络能力。模型随应用打包。 -->
+    <uses-permission android:name="android.permission.INTERNET" tools:node="remove" />
+
     <!-- 语音录入 -->
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <!-- 拍照 OCR -->

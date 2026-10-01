@@ -37,7 +37,6 @@ class FoodApp : Application() {
 
         appScope.launch {
             val settings = repository.loadSettings()
-            repository.saveSettings(settings)
             if (settings.notifyEnabled) {
                 ExpiryReminderWorker.schedule(this@FoodApp, settings.notifyHour)
                 ExpiryReminderWorker.runNow(this@FoodApp)

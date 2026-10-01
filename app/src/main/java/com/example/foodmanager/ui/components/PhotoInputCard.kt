@@ -64,6 +64,7 @@ fun PhotoInputCard(
     onRecognized: (rawText: String, drafts: List<FoodDraft>) -> Unit,
     modifier: Modifier = Modifier,
     singleItemMode: Boolean = true,
+    customFoods: List<String> = emptyList(),
     /** 提供时显示「手动选保质期」按钮（编辑页用它直接填日期，不必再拍一张） */
     onPickDate: (() -> Unit)? = null,
     onCollapse: (() -> Unit)? = null,
@@ -79,12 +80,12 @@ fun PhotoInputCard(
 
     var processing by remember { mutableStateOf(false) }
     var status by remember { mutableStateOf("") }
-    var pendingCameraPath by remember { mutableStateOf<String?>(null) }
+    var pendingCameraPath by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf<String?>(null) }
     /** 下一次拍照是否为「日期区域」模式 */
-    var pendingDateMode by remember { mutableStateOf(false) }
+    var pendingDateMode by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
 
     fun handleResult(rawText: String) {
-        val drafts = OcrTextParser.parse(rawText, "ocr", singleItemMode = singleItemMode)
+        val drafts = OcrTextParser.parse(rawText, "ocr", extraKeywords = customFoods, singleItemMode = singleItemMode)
             // 兜底：过滤掉"只有数量、没有名称"的空壳记录，
             // 否则一张照片可能凭空多出一条无意义的待入库项
             .filter { it.name.isNotBlank() }
@@ -204,17 +205,16 @@ fun PhotoInputCard(
             processing = true
             status = "正在识别图片文字…"
             scope.launch {
-                runCatching { ocrEngine.recognizeAndParse(context, uri) }
-                    .onSuccess { result ->
-                        processing = false
-                        status = if (result.drafts.isEmpty()) {
-                            "没有从图片里识别到食物信息，可换一张或手动填写"
-                        } else {
-                            "识别到 ${result.drafts.size} 条"
-                        }
-                        onRecognized(result.rawText, result.drafts)
+                runCatching {
+                    withContext(Dispatchers.Default) {
+                        val bitmap = OcrEngine.loadBitmap(context, uri)
+                        try { ocrEngine.recognizeBitmap(bitmap) }
+                        finally { if (!bitmap.isRecycled) bitmap.recycle() }
                     }
-                    .onFailure {
+                }.onSuccess { text ->
+                    processing = false
+                    handleResult(text)
+                }                    .onFailure {
                         processing = false
                         status = "识别失败：${it.message}"
                     }

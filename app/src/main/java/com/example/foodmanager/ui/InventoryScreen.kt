@@ -36,6 +36,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.foodmanager.core.DateUtils
@@ -57,7 +58,7 @@ fun InventoryScreen(
     val settings by viewModel.settings.collectAsStateWithLifecycle()
     val query by viewModel.query.collectAsStateWithLifecycle()
     val locationFilter by viewModel.locationFilter.collectAsStateWithLifecycle()
-    val today = remember { DateUtils.today() }
+    val today by viewModel.today.collectAsStateWithLifecycle()
 
     var pendingDelete by remember { mutableStateOf<FoodItem?>(null) }
     // 「标记已用完」会从库存移除，先确认一下（可撤销路径：设置 → 查看归档 → 恢复到库存）
@@ -126,6 +127,7 @@ fun InventoryScreen(
         },
         floatingActionButton = {
             ExtendedFloatingActionButton(
+                modifier = Modifier.testTag("add-food"),
                 onClick = onAddManual,
                 icon = {
                     Icon(

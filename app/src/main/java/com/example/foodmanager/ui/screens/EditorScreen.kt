@@ -33,6 +33,9 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -73,59 +76,34 @@ fun EditorScreen(
     onSaved: (Long) -> Unit,
 ) {
     // 默认展开手工录入（编辑页的主要目的就是改字段）
-    var mode by remember { mutableStateOf("manual") }
+    var mode by rememberSaveable { mutableStateOf("manual") }
     // 键盘是否弹出：用于给滚动内容追加余量
     val imeVisible = WindowInsets.isImeVisible
     var lastBatchHint by remember { mutableStateOf("") }
 
     val item = viewModel.item
-    val canSave = item.name.isNotBlank()
-
-    /**
-     * 手工表单的统一状态机（与「录入」页共用）。
-     *
-     * 编辑页的差异只在两点：
-     * - [ManualEntryState.confirmLocationWhenBlank] = true：位置为空时**弹窗问一句**
-     *   （录入页是直接拦下不落库）
-     * - 保存成功后由 [onSaved] 关页面（录入页是清空表单继续录入）
-     */
-    val form = remember {
-        ManualEntryState(initialItem = viewModel.item).apply {
-            confirmLocationWhenBlank = true
-        }
-    }
-    // 表单编辑直接写回 ViewModel 的当前条目
-    val statusMessage = form.status
-    val statusIsError = form.statusIsError
-
-    /** 拍照卡片里「手动选保质期」触发的日期选择 */
+    val canSave = viewModel.loaded && !viewModel.saving && item.name.isNotBlank()
+    var showingLocationConfirm by rememberSaveable { mutableStateOf(false) }
+    var showingDiscardConfirm by rememberSaveable { mutableStateOf(false) }
+    var showingArchiveConfirm by rememberSaveable { mutableStateOf(false) }
+    val statusMessage = if (viewModel.saving) "正在保存…" else viewModel.error
+    val statusIsError = viewModel.error.isNotBlank()
     var datePickerTarget by remember { mutableStateOf<String?>(null) }
-
-    val doSave: () -> Unit = {
-        form.setStatus("")
-        viewModel.save { id -> onSaved(id) }
-    }
-
-    /**
-     * 校验：位置为空先确认，避免"没填位置就存进去"。
-     * 顶栏 ✓ 与表单按钮走**同一路径**。
-     */
-    val requestSave: () -> Unit = {
-        when {
-            !form.canSaveWithoutAsking() -> {
-                if (form.confirmLocationWhenBlank) {
-                    form.requestLocationConfirm()
-                } else {
-                    form.setStatus(
-                        message = "还没有填写存放位置，填写后再保存（位置会用于快速查找）",
-                        isError = true,
-                    )
-                }
-            }
-            else -> doSave()
+    val requestBack: () -> Unit = {
+        if (!viewModel.saving) {
+            if (viewModel.hasChanges) showingDiscardConfirm = true else onBack()
         }
     }
-
+    BackHandler(onBack = requestBack)
+    LaunchedEffect(viewModel.savedId) {
+        viewModel.savedId?.let(onSaved)
+    }
+    val doSave: () -> Unit = { viewModel.save() }
+    val requestSave: () -> Unit = {
+        if (canSave) {
+            if (item.location.isBlank()) showingLocationConfirm = true else doSave()
+        }
+    }
     fun mergeFromDraft(draft: com.example.foodmanager.core.FoodDraft) {
         viewModel.update { current ->
             current.copy(
@@ -147,7 +125,7 @@ fun EditorScreen(
             TopAppBar(
                 title = { Text(if (viewModel.isEditing) "编辑食物" else "新增食物") },
                 navigationIcon = {
-                    IconButton(onClick = onBack) {
+                    IconButton(onClick = requestBack, enabled = !viewModel.saving) {
                         Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "返回")
                     }
                 },
@@ -169,7 +147,10 @@ fun EditorScreen(
                     .padding(padding),
                 contentAlignment = Alignment.Center,
             ) {
-                Text("加载中…")
+                Column {
+                    Text(viewModel.error.ifBlank { "加载中…" })
+                    if (viewModel.error.isNotBlank()) TextButton(onClick = { viewModel.retryLoad() }) { Text("重试") }
+                }
             }
             return@Scaffold
         }
@@ -224,6 +205,7 @@ fun EditorScreen(
             if (mode == "photo") {
                 PhotoInputCard(
                     title = "拍照录入",
+                    customFoods = customFoods,
                     // 编辑页没有"日期字段"入口，这里给一个直接选保质期的按钮
                     onPickDate = { datePickerTarget = "expiry" },
                     onRecognized = { _, drafts ->
@@ -259,14 +241,15 @@ fun EditorScreen(
             }
 
             // 手工录入：始终展示（拍照/语音识别结果也填进这张表）
-            // 表单内容以 ViewModel 为准，这里同步到 form 是为了让位置校验读到最新值
+            // 表单展示、识别填充和保存校验都读取同一份 ViewModel 状态。
             ManualInputCard(
                 item = item,
                 onChange = { updated ->
                     viewModel.update { updated }
-                    form.update(updated)
+
                 },
                 onSave = requestSave,
+                saving = viewModel.saving,
                 customLocations = customLocations,
                 title = if (viewModel.isEditing) "食物信息" else "手工录入",
                 subtitle = if (mode == "manual") {
@@ -280,10 +263,7 @@ fun EditorScreen(
                 statusIsError = statusIsError,
                 secondaryAction = if (viewModel.isEditing) {
                     {
-                        TextButton(onClick = {
-                            viewModel.update { it.copy(archived = true) }
-                            viewModel.save { id -> onSaved(id) }
-                        }) { Text("标记已用完") }
+                        TextButton(enabled = !viewModel.saving, onClick = { showingArchiveConfirm = true }) { Text("标记已用完") }
                     }
                 } else {
                     null
@@ -311,17 +291,35 @@ fun EditorScreen(
     }
 
     // 未填存放位置的确认：顶栏 ✓ 与表单按钮都走这里
-    if (form.showingLocationConfirm) {
+    if (showingLocationConfirm) {
         LocationConfirmDialog(
-            itemName = form.item.name,
-            onDismiss = { form.dismissLocationConfirm() },
+            itemName = item.name,
+            onDismiss = { showingLocationConfirm = false },
             onConfirm = {
-                form.dismissLocationConfirm()
+                showingLocationConfirm = false
                 doSave()
             },
         )
     }
 
+    if (showingDiscardConfirm) {
+        AlertDialog(
+            onDismissRequest = { showingDiscardConfirm = false },
+            title = { Text("放弃未保存的修改？") },
+            text = { Text("返回后，本次尚未保存的内容将被丢弃。") },
+            confirmButton = { TextButton(onClick = onBack) { Text("放弃修改") } },
+            dismissButton = { TextButton(onClick = { showingDiscardConfirm = false }) { Text("继续编辑") } },
+        )
+    }
+    if (showingArchiveConfirm) {
+        AlertDialog(
+            onDismissRequest = { showingArchiveConfirm = false },
+            title = { Text("标记为已用完？") },
+            text = { Text("将保存当前修改并移至归档，可以在设置中恢复。") },
+            confirmButton = { TextButton(onClick = { showingArchiveConfirm = false; viewModel.save(archive = true) }) { Text("标记已用完") } },
+            dismissButton = { TextButton(onClick = { showingArchiveConfirm = false }) { Text("取消") } },
+        )
+    }
     // 拍照卡片里「手动选保质期」的日期选择
     datePickerTarget?.let {
         FoodDatePickerDialog(

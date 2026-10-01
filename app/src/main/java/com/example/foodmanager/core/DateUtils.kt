@@ -97,8 +97,17 @@ object DateUtils {
     }
 
     /** 天数差（按自然日） */
-    fun daysBetween(from: Long, to: Long): Long =
-        TimeUnit.MILLISECONDS.toDays(startOfDay(to) - startOfDay(from))
+    fun daysBetween(from: Long, to: Long): Long {
+        fun dateNumber(value: Long): Long {
+            val local = calendar().apply { timeInMillis = value }
+            val utc = Calendar.getInstance(TimeZone.getTimeZone("UTC")).apply {
+                clear()
+                set(local.get(Calendar.YEAR), local.get(Calendar.MONTH), local.get(Calendar.DAY_OF_MONTH))
+            }
+            return TimeUnit.MILLISECONDS.toDays(utc.timeInMillis)
+        }
+        return dateNumber(to) - dateNumber(from)
+    }
 
     /** 人类可读的剩余天数描述 */
     fun describeRemaining(days: Long?): String = when {

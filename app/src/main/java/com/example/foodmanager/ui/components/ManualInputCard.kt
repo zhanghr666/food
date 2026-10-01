@@ -40,6 +40,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
@@ -88,6 +89,7 @@ fun ManualInputCard(
     /** 表单内显示的一行状态提示（如"已保存xxx"），不受键盘遮挡 */
     statusMessage: String = "",
     statusIsError: Boolean = false,
+    saving: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
@@ -101,6 +103,12 @@ fun ManualInputCard(
     // 编辑对象变化，或父级重置表单时，重新同步
     LaunchedEffect(item.id, resetToken) {
         quantityText = initialQuantityText(item.quantity)
+    }
+    LaunchedEffect(item.quantity) {
+        // 识别填充时同步数值，但保留用户正在输入的“0.”等中间文本。
+        if ((quantityText.toDoubleOrNull() ?: 0.0) != item.quantity) {
+            quantityText = initialQuantityText(item.quantity)
+        }
     }
 
     val canSave = item.name.isNotBlank()
@@ -176,6 +184,7 @@ fun ManualInputCard(
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Next),
                 keyboardActions = KeyboardActions(onAny = { quantityFocus.requestFocus() }),
                 modifier = Modifier
+                    .testTag("food-name")
                     .fillMaxWidth()
                     .then(
                         if (nameFocusRequester != null) {
@@ -318,7 +327,7 @@ fun ManualInputCard(
             ) {
                 Button(
                     onClick = onSave,
-                    enabled = canSave,
+                    enabled = canSave && !saving,
                     modifier = Modifier.weight(1f),
                 ) {
                     Icon(
@@ -327,7 +336,7 @@ fun ManualInputCard(
                         modifier = Modifier.size(18.dp),
                     )
                     Spacer(Modifier.width(6.dp))
-                    Text(saveLabel)
+                    Text(if (saving) "正在保存…" else saveLabel)
                 }
                 secondaryAction?.invoke()
                 if (onCollapse != null) {

@@ -13,7 +13,7 @@ import com.example.foodmanager.data.Units
 /**
  * 「录入」页的界面状态。
  *
- * **挂在 FoodsApp 层级**（比底部标签页活得久），因此：
+ * 由 FoodViewModel 持有并注册 SavedStateHandle 状态快照，因此：
  * 切到「首页 / 库存 / 设置」再回到「录入」时，
  * 手工录入填了一半的表单、以及「待入库」的若干草稿**都还在**。
  *
@@ -21,16 +21,29 @@ import com.example.foodmanager.data.Units
  * 组合被销毁，用户填的内容和刚识别出的待入库记录会全部丢失。
  *
  * 注意：这里只保存**界面状态**，真正的入库动作仍由 FoodViewModel 完成。
- * 进程被系统回收后状态仍会丢失（这是"记住到磁盘"的范畴，暂不处理）。
+ * 支持配置变更和系统保存状态后的进程重建；不承诺强制停止或卸载后恢复。
  */
 class ScanEntryState {
+    var saving by mutableStateOf(false)
+    var saveMessage by mutableStateOf("")
+
+    fun snapshot() = Snapshot(
+        ArrayList(drafts), manual.item, rawText.take(12_000), lastParsedCount, lastSingleItemMode,
+    )
+
+    data class Snapshot(
+        val drafts: ArrayList<FoodDraft>,
+        val manual: FoodItem,
+        val rawText: String,
+        val parsedCount: Int,
+        val singleItemMode: Boolean,
+    ) : java.io.Serializable
 
     /** 待入库草稿（拍照 / 语音产生；手工录入不经过这里） */
     val drafts = mutableStateListOf<FoodDraft>()
 
     /**
-     * 手工录入表单状态：与编辑页**共用同一个状态机** [ManualEntryState]。
-     * 这样两处的"位置为空怎么处理""保存后表单怎么办"不会再各写一套。
+     * 手工录入表单状态。编辑页内容由 EditorViewModel 单独持有，避免双份状态漂移。
      */
     val manual = ManualEntryState()
 
@@ -89,6 +102,17 @@ class ScanEntryState {
     }
 
     companion object {
+        fun restore(snapshot: Snapshot?) = ScanEntryState().apply {
+            if (snapshot != null) {
+                drafts.addAll(snapshot.drafts)
+                FoodDraft.reserveIdsThrough(snapshot.drafts.maxOfOrNull { it.draftId } ?: 0L)
+                manual.update(snapshot.manual)
+                rawText = snapshot.rawText
+                lastParsedCount = snapshot.parsedCount
+                lastSingleItemMode = snapshot.singleItemMode
+            }
+        }
+
         fun blankItem(unit: String) = ManualEntryState.blankItem(unit)
     }
 }

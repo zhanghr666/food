@@ -1,6 +1,9 @@
 package com.example.foodmanager.voice
 
 import android.content.Context
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.core.content.ContextCompat
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
@@ -154,6 +157,11 @@ class VoiceRecognizer(private val context: Context) {
 
     private fun startListening(loaded: Model) {
         if (audioRecord != null) return
+        if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            holdActive = false
+            _state.tryEmit(VoiceState.Error("未获得录音权限，请在语音录入时允许使用麦克风"))
+            return
+        }
         val rec = Recognizer(loaded, SAMPLE_RATE)
         // 注入领域语法：解码时只能从食物/单位/位置/时间词里选，
         // 从根上避免通用模型把「西瓜」猜成「吸管」这类同音字错误。
@@ -198,7 +206,17 @@ class VoiceRecognizer(private val context: Context) {
         }
         audioRecord = record
         Log.i(TAG, "打开麦克风（缓冲 ${bufferSize / 2} 采样≈${bufferSize / 2 / 16}ms），开始识别")
-        runCatching { record.startRecording() }
+        try {
+            record.startRecording()
+        } catch (_: SecurityException) {
+            holdActive = false
+            record.release()
+            audioRecord = null
+            rec.close()
+            recognizer = null
+            _state.tryEmit(VoiceState.Error("录音权限已撤销，请重新授权后再试"))
+            return
+        }
         _state.tryEmit(VoiceState.Listening)
 
         captureJob = scope.launch {

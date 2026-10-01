@@ -4,12 +4,7 @@ plugins {
     alias(libs.plugins.ksp)
 }
 
-// 强制以 UTF-8 读取 Kotlin / Java 源码，避免中文文案在非 UTF-8 默认编码的机器上乱码
-tasks.withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask<*>>().configureEach {
-    compilerOptions {
-        freeCompilerArgs.add("-Xsource-charset=UTF-8")
-    }
-}
+// JVM 文件编码在 gradle.properties 统一设置为 UTF-8。
 tasks.withType<JavaCompile>().configureEach {
     options.encoding = "UTF-8"
 }
@@ -38,12 +33,20 @@ android {
     }
 
     buildTypes {
+        // 验证包单独安装，不覆盖手机中的正式食物库存。
+        create("validation") {
+            initWith(getByName("debug"))
+            applicationIdSuffix = ".validation"
+            matchingFallbacks += "debug"
+        }
         release {
             optimization {
                 enable = false
             }
         }
     }
+    testBuildType = providers.gradleProperty("testBuildType").getOrElse("debug")
+    sourceSets.getByName("androidTest").assets.srcDir("$projectDir/schemas")
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_11
         targetCompatibility = JavaVersion.VERSION_11
