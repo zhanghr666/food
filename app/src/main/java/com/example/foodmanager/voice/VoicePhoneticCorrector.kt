@@ -1,35 +1,7 @@
 package com.example.foodmanager.voice
 
-/**
- * 离线语音识别结果的「同音字/近音词」校正。
- *
- * Vosk 小模型是通用中文模型，对食物名词、位置词等专有词容易输出同音字
- * （实测：西瓜→吸管/习惯、下面→厦门、过期→过其）。
- * 这里做两件事：
- *  1. 高频错误词的**定向修正表**（安全、可控）
- *  2. 拼音近音校正：只把**不在食物词表里**的词替换成**拼音高度相似**的已知食物
- *
- * 校正只作用于语音结果，OCR 识别到的文字不做改动。
- */
+/** 限定上下文纠错；歧义食品只给建议，保留原始文字供核对。 */
 object VoicePhoneticCorrector {
-
-    /** 高频错误 -> 正确（定向修正，优先级最高） */
-    private val FIX_MAP: List<Pair<Regex, String>> = listOf(
-        Regex("吸管|习惯|稀管|席管") to "西瓜",
-        Regex("厦门|夏门|吓门|下楼") to "下面",
-        Regex("过其|过起|过齐|过七|过去|过气") to "过期",
-        Regex("冰霜|冰厢|宾箱") to "冰箱",
-        Regex("窗台|窗抬|床台") to "窗台",
-        Regex("牛奶|牛乃|流奶") to "牛奶",
-        Regex("西红柿|西红柿") to "西红柿",
-        Regex("鸡蛋|鸡旦|机蛋") to "鸡蛋",
-        Regex("核桃|合桃|何桃") to "核桃",
-        Regex("苹果|平果|瓶果") to "苹果",
-        Regex("香蕉|香焦|相蕉") to "香蕉",
-        Regex("葡萄|葡陶|普桃") to "葡萄",
-        Regex("大米|大迷|大密") to "大米",
-        Regex("土豆|土逗|图豆") to "土豆",
-    )
 
     /** 时间/状态词校正 */
     private val TIME_FIX = listOf(
@@ -37,38 +9,6 @@ object VoicePhoneticCorrector {
         Regex("到其|到起|到齐") to "到期",
         Regex("保质其|保质起|保制期") to "保质期",
         Regex("有效其|有效起") to "有效期",
-    )
-
-    /** 位置词校正（让「存放位置」更准） */
-    private val LOCATION_FIX = listOf(
-        Regex("厦门|夏门|吓门") to "下面",
-        Regex("冷臧|冷藏|冷藏") to "冷藏",
-        Regex("冷冻|冷冬|冷洞") to "冷冻",
-        Regex("常溫|常温|肠温") to "常温",
-    )
-
-    /** 已知食物词表（用于近音替换） */
-    private val FOOD_LEXICON = listOf(
-        "西瓜", "核桃", "苹果", "牛奶", "酸奶", "鸡蛋", "鸭蛋", "猪肉", "牛肉", "羊肉", "鸡肉",
-        "大米", "面粉", "面包", "馒头", "面条", "香蕉", "橙子", "橘子", "梨", "葡萄", "草莓",
-        "蓝莓", "柠檬", "芒果", "樱桃", "火龙果", "柚子", "猕猴桃", "青菜", "白菜",
-        "菠菜", "生菜", "西兰花", "黄瓜", "土豆", "洋葱", "胡萝卜", "辣椒", "茄子", "蘑菇",
-        "香菇", "玉米", "南瓜", "芹菜", "韭菜", "豆腐", "西红柿", "番茄", "鱼", "虾", "螃蟹",
-        "带鱼", "紫菜", "海带", "汤圆", "饺子", "饼干", "巧克力", "糖果", "果汁", "可乐",
-        "咖啡", "茶叶", "啤酒", "红酒", "酱油", "食用油", "蜂蜜", "花生", "红枣", "枸杞",
-        "木耳", "银耳", "绿豆", "黄豆", "年糕", "矿泉水", "豆奶", "速冻", "冰淇淋",
-        "雪糕", "剩菜", "熟食", "腐竹", "粉丝", "腰果", "杏仁", "开心果", "板栗", "莲子",
-        // 常见水果（离线识别最容易出同音字的）
-        "石榴", "柿子", "菠萝", "哈密瓜", "木瓜", "杨梅", "枇杷", "龙眼", "荔枝", "山竹",
-        "百香果", "无花果", "甘蔗", "青提", "红提", "车厘子", "西梅", "莲雾", "砂糖橘",
-        "沃柑", "丑橘", "香梨", "雪梨", "水蜜桃", "油桃", "冬枣", "圣女果", "杨桃", "榴莲",
-        "菠萝蜜", "芭乐", "番石榴", "椰子", "李子", "梅子", "蓝莓", "桃",
-        // 常见蔬菜
-        "油菜", "娃娃菜", "卷心菜", "包菜", "甘蓝", "空心菜", "茼蒿", "油麦菜", "芥菜",
-        "冬瓜", "丝瓜", "苦瓜", "西葫芦", "莲藕", "山药", "芋头", "红薯", "紫薯",
-        "豌豆", "毛豆", "四季豆", "荷兰豆", "金针菇", "杏鲍菇", "平菇", "口蘑",
-        "秋葵", "芦笋", "莴笋", "茭白", "豆芽", "香菜", "小葱", "大葱", "生姜", "大蒜",
-        "蒜苗", "蒜苔", "青椒", "彩椒", "尖椒", "小米椒",
     )
 
     /** 逐字拼音（覆盖食物/位置/时间常用字） */
@@ -209,64 +149,34 @@ object VoicePhoneticCorrector {
     fun correct(text: String, extraFoods: List<String> = emptyList()): String {
         if (text.isBlank()) return text
         var result = text
-        // 1) 定向修正表
+        // 真实常用词（过去、吸管、习惯、厦门）不作全局替换。用户词优先保留。
         for ((pattern, replacement) in TIME_FIX) {
-            result = pattern.replace(result, replacement)
-        }
-        for ((pattern, replacement) in FIX_MAP) {
-            result = pattern.replace(result, replacement)
-        }
-        for ((pattern, replacement) in LOCATION_FIX) {
-            result = pattern.replace(result, replacement)
-        }
-        // 2) 食物词近音校正：在整句里滑动窗口找食物名（不依赖空格分词）
-        val lexicon = if (extraFoods.isEmpty()) FOOD_LEXICON else (FOOD_LEXICON + extraFoods).distinct()
-        val fixed = correctFoodNamesInSentence(result, lexicon)
-        return fixed
-    }
-
-    /**
-     * 在整句里找出"听起来像某个食物"的片段并替换成规范食物名。
-     *
-     * 不依赖空格分词（Vosk 有时输出不带空格，如「有四个十六放在了窗台下面」），
-     * 而是用 2~5 字的滑动窗口逐窗比对，取相似度最高且唯一的替换。
-     */
-    private fun correctFoodNamesInSentence(text: String, lexicon: List<String>): String {
-        if (text.isBlank()) return text
-        var result = text
-        var guard = 0
-        while (guard++ < MAX_REPLACEMENTS) {
-            var bestFood: String? = null
-            var bestStart = -1
-            var bestLen = 0
-            var bestScore = 0.0
-            var bestCount = 0
-
-            for (win in 2..5) {
-                if (result.length < win) break
-                for (start in 0..(result.length - win)) {
-                    val token = result.substring(start, start + win)
-                    if (token.any { it.isDigit() }) continue
-                    val food = matchFood(token, lexicon) ?: continue
-                    val score = similarity(syllablesOf(token), syllablesOf(food))
-                    when {
-                        score > bestScore -> {
-                            bestScore = score
-                            bestFood = food
-                            bestStart = start
-                            bestLen = win
-                            bestCount = 1
-                        }
-
-                        score == bestScore && food == bestFood -> bestCount++
-                    }
-                }
+            result = pattern.replace(result) { m ->
+                val left = result.substring(0, m.range.first).takeLast(18)
+                if (extraFoods.any { it.contains(m.value) } || m.value in setOf("过去", "过气")) m.value
+                else if (replacement == "保质期" || replacement == "有效期" ||
+                    Regex("(?:天|日|号|月|周|星期|今天|明天|后天)\\s*(?:后|之后)?\\s*$").containsMatchIn(left)) replacement
+                else m.value
             }
-            // 要求足够像、且该片段只出现一次，避免误伤
-            if (bestFood == null || bestScore < 0.8 || bestCount != 1) break
-            result = result.substring(0, bestStart) + bestFood + result.substring(bestStart + bestLen)
+        }
+        result = Regex("(冰箱|柜子|桌子|窗台)\\s*(厦门|夏门|吓门)").replace(result) { m ->
+            if (extraFoods.any { it.contains(m.value.replace(" ", "")) }) m.value
+            else m.value.replace(m.groupValues[2], "下面")
         }
         return result
+    }
+
+    /** 歧义词只提示候选，用户确认前不把原文改成食品名。 */
+    fun suggestions(text: String, extraFoods: List<String> = emptyList()): List<String> {
+        val lexicon = com.example.foodmanager.ocr.OcrTextParser.foodKeywordNames(extraFoods)
+        val slot = Regex("(?:[0-9零〇一二两三四五六七八九十百]+\\s*(?:个|只|颗|瓶|盒|袋)\\s*(?:的\\s*)?)([\\p{IsHan}]{2,5}?)(?=\\s|在|放|还有|$)")
+        return slot.findAll(text).mapNotNull { m ->
+            val word = m.groupValues[1]
+            if (word in extraFoods || word in lexicon) null else {
+                val candidate = if (word in listOf("吸管", "习惯", "稀管", "席管")) "西瓜" else matchFood(word, lexicon)
+                candidate?.let { "名称待确认：原文“$word”，可能是“$it”" }
+            }
+        }.distinct().toList()
     }
 
     /** 纯比对逻辑：token 听起来是不是某个食物词（不做任何替换） */
@@ -301,28 +211,8 @@ object VoicePhoneticCorrector {
         "东西", "物品", "食品", "零食", "饮料", "家里", "家里有", "房间", "客厅", "卧室",
     )
 
-    /** 按音节比较：完全相同 1 分，同首字母（近似声母）0.5 分 */
-    private fun similarity(a: List<String>, b: List<String>): Double {
-        if (a.isEmpty() || b.isEmpty()) return 0.0
-        val total = maxOf(a.size, b.size).toDouble()
-        var score = 0.0
-        val n = minOf(a.size, b.size)
-        for (i in 0 until n) {
-            val sa = a[i]
-            val sb = b[i]
-            score += when {
-                sa == sb -> 1.0
-                sa.firstOrNull() == sb.firstOrNull() -> 0.5
-                else -> 0.0
-            }
-        }
-        return score / total
-    }
-
     /** 逐字转拼音音节列表 */
     private fun syllablesOf(text: String): List<String> =
         text.map { ch -> PINYIN[ch] ?: ch.toString() }
 
-    /** 一句话里最多做多少次食物名替换，防止死循环 */
-    private const val MAX_REPLACEMENTS = 6
 }

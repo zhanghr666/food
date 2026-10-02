@@ -11,6 +11,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.Assert.assertFalse
 
 /** 核心解析逻辑的单元测试（纯 JVM，不需要设备） */
 class FoodParserTest {
@@ -90,7 +91,8 @@ class FoodParserTest {
         assertEquals("乳制品", draft.category)
         assertEquals(DateUtils.of(2026, 1, 5), draft.productionDate)
         assertEquals(DateUtils.of(2026, 7, 5), draft.expiryDate)
-        assertEquals("常温储物柜", draft.location)
+        assertEquals("", draft.location)
+        assertTrue(draft.note.contains("常温"))
     }
 
     @Test
@@ -186,8 +188,8 @@ class FoodParserTest {
             !name.contains("仅供参考") && !name.contains("实物") && !name.contains("时尚生活"),
         )
         assertTrue("品名应命中真实商品（饼干），实际得到：$name", name.contains("饼干"))
-        assertEquals(50.0, drafts.first().quantity, 0.001)
-        assertEquals("克", drafts.first().unit)
+        assertFalse(drafts.first().quantitySpecified)
+        assertTrue(drafts.first().note.contains("50克"))
     }
 
     // ---------------- 语音解析 ----------------
@@ -286,21 +288,22 @@ class FoodParserTest {
         assertEquals("鸡蛋", drafts[1].name)
     }
 
-    /** 真机实测：离线识别把「西瓜」听成「吸管」，应按拼音近似纠正回食物名 */
+    /** 真机实测：离线识别把「西瓜」听成「吸管」，保留原名并提示候选食品名 */
     @Test
-    fun parseVoiceCorrectsHomophoneFoodName() {
+    fun parseVoiceKeepsAmbiguousNameAndSuggestsFood() {
         val draft = VoiceTextParser.parse("家里有两个吸管还有一天过期")
         assertNotNull(draft)
-        assertEquals("西瓜", draft!!.name)
+        assertEquals("吸管", draft!!.name)
+        assertTrue(draft.note.contains("西瓜"))
         assertEquals(2.0, draft.quantity, 0.001)
         assertEquals(DateUtils.todayPlus(1), draft.expiryDate)
     }
 
-    /** 真机实测整句：吸管→西瓜、厦门→下面、过其→过期 都要被修正 */
+    /** 真机实测整句：只自动修正有明确上下文的方位和时间，歧义食品保留原文 */
     @Test
     fun correctorFixesRealSentence() {
         val fixed = VoicePhoneticCorrector.correct("有 两个 的 吸管 在 冰箱 厦门 放着 还有 三天 过其")
-        assertEquals("有 两个 的 西瓜 在 冰箱 下面 放着 还有 三天 过期", fixed)
+        assertEquals("有 两个 的 吸管 在 冰箱 下面 放着 还有 三天 过期", fixed)
     }
 
     @Test
@@ -311,19 +314,20 @@ class FoodParserTest {
 
     @Test
     fun correctorFixesTimeWords() {
-        assertEquals("过期", VoicePhoneticCorrector.correct("过去"))
-        assertEquals("到期", VoicePhoneticCorrector.correct("到其"))
+        assertEquals("过去", VoicePhoneticCorrector.correct("过去"))
+        assertEquals("到其", VoicePhoneticCorrector.correct("到其"))
+        assertEquals("三天到期", VoicePhoneticCorrector.correct("三天到其"))
         assertEquals("保质期", VoicePhoneticCorrector.correct("保质其"))
     }
 
-    /** 真机实测：「一箱牛奶三十盒」应取实际数量 30 盒，而不是包装数 1 箱 */
+    /** 真机方案 A：多个数量没有明确库存标签时请用户确认，不按数词长度猜测 */
     @Test
-    fun parseVoicePrefersActualCountOverPackage() {
+    fun parseVoiceRequestsConfirmationForMultipleCounts() {
         val draft = VoiceTextParser.parse("家里有一箱牛奶三十盒三十天过期")
         assertNotNull(draft)
         assertEquals("牛奶", draft!!.name)
-        assertEquals(30.0, draft.quantity, 0.001)
-        assertEquals("盒", draft.unit)
+        assertFalse(draft.quantitySpecified)
+        assertTrue(draft.note.contains("多个数量"))
     }
 
     @Test
@@ -341,8 +345,8 @@ class FoodParserTest {
         val draft = VoiceTextParser.parse("家里 有 一 箱 牛奶 还有 三十 盒 三十 天 过期")
         assertNotNull(draft)
         assertEquals("牛奶", draft!!.name)
-        assertEquals(30.0, draft.quantity, 0.001)
-        assertEquals("盒", draft.unit)
+        assertFalse(draft.quantitySpecified)
+        assertTrue(draft.note.contains("多个数量"))
         assertEquals(DateUtils.todayPlus(30), draft.expiryDate)
     }
 
@@ -355,18 +359,19 @@ class FoodParserTest {
         assertEquals("箱", draft.unit)
     }
 
-    /** 真机实测：「石榴」被识别成「十六」，应校正回水果名并保留数量 */
+    /** 真机实测：「石榴」被识别成「十六」，保留歧义原文，解析时给出水果候选并保留数量 */
     @Test
     fun correctorFixesPomegranateHomophone() {
         val fixed = VoicePhoneticCorrector.correct("有 四 个 十六 放在 了 窗台 下面 还有 十 天 过期")
-        assertEquals("有 四 个 石榴 放在 了 窗台 下面 还有 十 天 过期", fixed)
+        assertEquals("有 四 个 十六 放在 了 窗台 下面 还有 十 天 过期", fixed)
     }
 
     @Test
     fun parseVoicePomegranateSentence() {
         val draft = VoiceTextParser.parse("有 四 个 十六 放在 了 茶几 底下 还有 十 天 过期")
         assertNotNull(draft)
-        assertEquals("石榴", draft!!.name)
+        assertEquals("十六", draft!!.name)
+        assertTrue(draft.note.contains("石榴"))
         assertEquals(4.0, draft.quantity, 0.001)
         assertEquals("个", draft.unit)
         assertEquals(DateUtils.todayPlus(10), draft.expiryDate)
@@ -439,9 +444,9 @@ class FoodParserTest {
 
     @Test
     fun correctorHandlesXiguanVariant() {
-        assertEquals("西瓜", VoicePhoneticCorrector.correct("习惯"))
-        assertEquals("西瓜", VoicePhoneticCorrector.correct("吸管"))
-        assertEquals("下面", VoicePhoneticCorrector.correct("厦门"))
+        assertEquals("习惯", VoicePhoneticCorrector.correct("习惯"))
+        assertEquals("吸管", VoicePhoneticCorrector.correct("吸管"))
+        assertEquals("厦门", VoicePhoneticCorrector.correct("厦门"))
     }
 
     @Test
@@ -467,10 +472,10 @@ class FoodParserTest {
 
     @Test
     fun customFoodExtendsCorrectorWithoutBreakingBuiltins() {
-        // 自定义食品会扩充同音校正词表；内置的「吸管 -> 西瓜」规则必须仍然生效
+        // 自定义食品参与候选词表；真实词语不能被全局强制替换
         val custom = listOf("螺蛳粉")
-        assertEquals("西瓜", VoicePhoneticCorrector.correct("吸管", custom))
-        assertEquals("下面", VoicePhoneticCorrector.correct("厦门", custom))
+        assertEquals("吸管", VoicePhoneticCorrector.correct("吸管", custom))
+        assertEquals("厦门", VoicePhoneticCorrector.correct("厦门", custom))
         // 已经说对的名称不应被改动
         assertEquals("螺蛳粉", VoicePhoneticCorrector.correct("螺蛳粉", custom))
         // 与自定义食品音节完全不同的词不会被误替换（只做精确同音替换）

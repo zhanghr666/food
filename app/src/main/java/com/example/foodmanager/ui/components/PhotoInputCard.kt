@@ -65,6 +65,7 @@ fun PhotoInputCard(
     modifier: Modifier = Modifier,
     singleItemMode: Boolean = true,
     customFoods: List<String> = emptyList(),
+    foodAliases: Map<String, String> = emptyMap(),
     /** 提供时显示「手动选保质期」按钮（编辑页用它直接填日期，不必再拍一张） */
     onPickDate: (() -> Unit)? = null,
     onCollapse: (() -> Unit)? = null,
@@ -84,11 +85,12 @@ fun PhotoInputCard(
     /** 下一次拍照是否为「日期区域」模式 */
     var pendingDateMode by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
 
-    fun handleResult(rawText: String) {
-        val drafts = OcrTextParser.parse(rawText, "ocr", extraKeywords = customFoods, singleItemMode = singleItemMode)
+    fun handleResult(rawText: String, dateOnly: Boolean = false) {
+        val drafts = OcrTextParser.parse(rawText, "ocr", extraKeywords = customFoods, singleItemMode = singleItemMode, foodAliases = foodAliases)
             // 兜底：过滤掉"只有数量、没有名称"的空壳记录，
             // 否则一张照片可能凭空多出一条无意义的待入库项
-            .filter { it.name.isNotBlank() }
+            .filter { it.name.isNotBlank() || (dateOnly && it.isUsable) }
+            .map { it.copy(dateOnly = dateOnly) }
         status = when {
             drafts.isEmpty() -> "没有从图片里识别到食物信息，可换一张或手动填写"
             else -> {
@@ -168,7 +170,7 @@ fun PhotoInputCard(
                 runCatching { recognizeFile(path, dateMode) }
                     .onSuccess { text ->
                         processing = false
-                        handleResult(text)
+                        handleResult(text, dateOnly = dateMode)
                     }
                     .onFailure {
                         processing = false

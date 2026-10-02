@@ -256,9 +256,9 @@ fun joinInfo(vararg parts: String?, separator: String = "　"): String =
         .filter { it.isNotEmpty() }
         .joinToString(separator)
 
-/** 数量描述：数量为 0 表示未填写，返回空串（避免出现「0个」） */
-fun describeQuantityText(quantity: Double, unit: String): String =
-    if (quantity > 0) "${formatQuantity(quantity)}$unit" else ""
+/** 数量描述：区分未填写、小数余量及明确为零。 */
+fun describeQuantityText(quantity: Double, unit: String, specified: Boolean = quantity > 0): String =
+    if (!specified) "数量未填写" else if (quantity == 0.0) "剩余 0$unit · 可归档" else "${formatQuantity(quantity)}$unit"
 
 /** 数量 + 单位 一行 */
 @Composable

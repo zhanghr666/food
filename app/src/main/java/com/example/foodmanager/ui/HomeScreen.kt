@@ -87,7 +87,7 @@ fun HomeScreen(
     // 从通知进来：滚到提醒清单，让用户一眼看到"哪些快过期了"
     LaunchedEffect(highlightAlerts, alerts, settings.homeBannerEnabled) {
         if (highlightAlerts && alerts.isNotEmpty()) {
-            listState.animateScrollToItem(if (settings.homeBannerEnabled) 3 else 2)
+            listState.animateScrollToItem(0)
             onAlertsHighlighted()
         }
     }
@@ -116,6 +116,41 @@ fun HomeScreen(
             contentPadding = PaddingValues(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
+            // ---------- 需要处理的清单 ----------
+            if (alerts.isNotEmpty()) {
+                item {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 6.dp)
+                            .clickable { viewModel.showStatus(null); onOpenInventory() },
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(
+                            Icons.Filled.NotificationsActive,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp),
+                            tint = StatusColors.expired,
+                        )
+                        Spacer(Modifier.width(8.dp))
+                        Text(
+                            text = "今天优先处理（${alerts.size}）",
+                            style = MaterialTheme.typography.titleMedium,
+                            modifier = Modifier.weight(1f),
+                        )
+                        Text("全部", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowForward,
+                            contentDescription = null,
+                            modifier = Modifier.size(16.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    }
+                }
+                items(alerts.take(3), key = { it.id }) { item ->
+                    AlertRow(item = item, today = today, warnDays = settings.warnDays, onClick = { onOpenItem(item.id) })
+                }
+            }
             // ---------- 提醒横幅 ----------
             if (settings.homeBannerEnabled && alerts.isNotEmpty()) {
                 item {
@@ -123,7 +158,7 @@ fun HomeScreen(
                         alerts = alerts,
                         today = today,
                         warnDays = settings.warnDays,
-                        onClick = onOpenInventory,
+                        onClick = { viewModel.showStatus(null); onOpenInventory() },
                     )
                 }
             } else if (stats.total > 0 && alerts.isEmpty()) {
@@ -153,7 +188,7 @@ fun HomeScreen(
                                     color = StatusColors.fresh,
                                 )
                                 Text(
-                                    text = "继续保持！有新的临期食物会在这里和通知里提醒你",
+                                    text = "仅根据已填写日期判断；未设置到期日的记录不会提醒",
                                     style = MaterialTheme.typography.labelSmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 )
@@ -163,18 +198,19 @@ fun HomeScreen(
                 }
             }
 
-            // ---------- 统计 ----------
             item {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    StatCard("已过期", stats.expired.toString(), StatusColors.expired, Modifier.weight(1f))
-                    StatCard("临期", stats.expiringSoon.toString(), StatusColors.expiring, Modifier.weight(1f))
-                    StatCard("新鲜", stats.fresh.toString(), StatusColors.fresh, Modifier.weight(1f))
-                    StatCard("无保质期", stats.noExpiry.toString(), StatusColors.noExpiry, Modifier.weight(1f))
+                Column(Modifier.padding(horizontal = 12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    listOf(
+                        listOf(Triple(FoodStatus.EXPIRED, stats.expired, StatusColors.expired), Triple(FoodStatus.EXPIRING_SOON, stats.expiringSoon, StatusColors.expiring)),
+                        listOf(Triple(FoodStatus.FRESH, stats.fresh, StatusColors.fresh), Triple(FoodStatus.NO_EXPIRY, stats.noExpiry, StatusColors.noExpiry)),
+                    ).forEach { row ->
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            row.forEach { (status, count, color) ->
+                                StatCard(status.label, count.toString(), color,
+                                    Modifier.weight(1f).clickable { viewModel.showStatus(status); onOpenInventory() })
+                            }
+                        }
+                    }
                 }
             }
 
@@ -210,41 +246,7 @@ fun HomeScreen(
                 }
             }
 
-            // ---------- 需要处理的清单 ----------
-            if (alerts.isNotEmpty()) {
-                item {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 16.dp, vertical = 6.dp)
-                            .clickable { onOpenInventory() },
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Icon(
-                            Icons.Filled.NotificationsActive,
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp),
-                            tint = StatusColors.expired,
-                        )
-                        Spacer(Modifier.width(8.dp))
-                        Text(
-                            text = "需要尽快处理（${alerts.size}）",
-                            style = MaterialTheme.typography.titleMedium,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text("全部", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowForward,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp),
-                            tint = MaterialTheme.colorScheme.primary,
-                        )
-                    }
-                }
-                items(alerts.take(8), key = { it.id }) { item ->
-                    AlertRow(item = item, today = today, warnDays = settings.warnDays, onClick = { onOpenItem(item.id) })
-                }
-            } else if (allItems.isEmpty()) {
+            if (allItems.isEmpty()) {
                 item {
                     EmptyState(
                         title = "还没有记录任何食物",
@@ -382,7 +384,7 @@ private fun AlertRow(
                 )
                 Text(
                     text = com.example.foodmanager.ui.components.joinInfo(
-                        com.example.foodmanager.ui.components.describeQuantityText(item.quantity, item.unit),
+                        com.example.foodmanager.ui.components.describeQuantityText(item.quantity, item.unit, item.quantitySpecified),
                         item.location,
                         "到期 " + DateUtils.formatShort(item.expiryDate),
                     ),

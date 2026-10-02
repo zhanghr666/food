@@ -103,10 +103,10 @@ object FoodNotifier {
     }
 
     private fun unitText(item: FoodItem): String =
-        if (item.quantity > 0) " × ${formatQty(item.quantity)}${item.unit}" else ""
+        if (item.quantitySpecified) " × ${formatQty(item.quantity)}${item.unit}" else ""
 
     private fun formatQty(value: Double): String =
-        if (value % 1.0 == 0.0) value.toInt().toString() else value.toString()
+        if (value.isFinite()) java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString() else "未填写"
 
     private fun summarize(items: List<FoodItem>, today: Long): String {
         val head = items.take(3).joinToString("、") { it.name }

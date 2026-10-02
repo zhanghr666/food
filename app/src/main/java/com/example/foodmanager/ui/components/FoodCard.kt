@@ -2,7 +2,7 @@ package com.example.foodmanager.ui.components
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -25,14 +25,16 @@ import androidx.compose.material.icons.filled.Schedule
 import androidx.compose.material.icons.outlined.AcUnit
 import androidx.compose.material.icons.outlined.Kitchen
 import androidx.compose.material.icons.outlined.WbSunny
-import androidx.compose.material3.Card
+import androidx.compose.material3.*
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -97,7 +99,7 @@ fun LocationIcon(location: String, modifier: Modifier = Modifier) {
 }
 
 fun formatQuantity(value: Double): String =
-    if (value % 1.0 == 0.0) value.toInt().toString() else value.toString()
+    if (value.isFinite()) java.math.BigDecimal.valueOf(value).stripTrailingZeros().toPlainString() else "未填写"
 
 /**
  * 食物卡片：展示名称、数量、位置、买入时间、保质期与状态，并提供数量加减、编辑、删除、归档操作。
@@ -108,12 +110,13 @@ fun FoodCard(
     warnDays: Int,
     today: Long,
     onClick: () -> Unit,
-    onQuantityChange: (Double) -> Unit,
+    onQuantityChange: () -> Unit,
     onEdit: () -> Unit,
     onDelete: () -> Unit,
     onArchive: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var showMore by rememberSaveable(item.id) { mutableStateOf(false) }
     val status = item.status(today, warnDays)
     val days = item.daysToExpiry(today)
     val accent = when (status) {
@@ -131,12 +134,12 @@ fun FoodCard(
         colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface),
         elevation = CardDefaults.cardElevation(defaultElevation = 1.dp),
     ) {
-        Row(modifier = Modifier.fillMaxWidth()) {
+        Row(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
             // 左侧状态色条
             Box(
                 modifier = Modifier
                     .width(4.dp)
-                    .height(112.dp)
+                    .fillMaxHeight()
                     .background(accent),
             )
             Column(modifier = Modifier.padding(12.dp)) {
@@ -144,7 +147,7 @@ fun FoodCard(
                     Text(
                         text = item.name.ifBlank { "未命名食物" },
                         style = MaterialTheme.typography.titleMedium,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
@@ -156,31 +159,24 @@ fun FoodCard(
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
                     }
-                    Spacer(Modifier.weight(1f))
-                    StatusChip(status)
+
                 }
 
+                StatusChip(status)
                 Spacer(Modifier.height(6.dp))
 
                 Row(verticalAlignment = Alignment.CenterVertically) {
-                    // 数量为 0 表示未填写：整块隐藏，避免出现「0 个」这种噪音
-                    // （与列表副标题 describeQuantityText、通知里的处理保持一致）
-                    if (item.quantity > 0) {
-                        Text(
-                            text = "${formatQuantity(item.quantity)} ${item.unit}",
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontWeight = FontWeight.SemiBold,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
-                        Spacer(Modifier.width(10.dp))
-                    }
+                    Text(describeQuantityText(item.quantity, item.unit, item.quantitySpecified),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(10.dp))
                     LocationIcon(item.location)
                     Spacer(Modifier.width(3.dp))
                     Text(
                         text = item.location.ifBlank { "未填写位置" },
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
+                        maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.weight(1f, fill = false),
                     )
@@ -197,7 +193,7 @@ fun FoodCard(
                     Spacer(Modifier.width(10.dp))
                     Text(
                         text = if (item.expiryDate == null) {
-                            "无保质期"
+                            ""
                         } else {
                             "到期 ${DateUtils.formatShort(item.expiryDate)}"
                         },
@@ -217,7 +213,7 @@ fun FoodCard(
                     )
                     Spacer(Modifier.width(3.dp))
                     Text(
-                        text = DateUtils.describeRemaining(days),
+                        text = if (days == null) "补充到期日后可提醒" else DateUtils.describeRemaining(days),
                         style = MaterialTheme.typography.labelSmall,
                         color = accent,
                         fontWeight = FontWeight.SemiBold,
@@ -226,74 +222,24 @@ fun FoodCard(
 
                 Spacer(Modifier.height(8.dp))
 
-                // 操作区：5 个按钮，图标加大 + 每个都带文字说明，竖向两端对齐便于点击
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    CardAction(
-                        icon = Icons.Filled.Remove,
-                        label = "减一",
-                        enabled = item.quantity > 0,
-                        onClick = { onQuantityChange(-1.0) },
-                    )
-                    CardAction(
-                        icon = Icons.Filled.Add,
-                        label = "加一",
-                        onClick = { onQuantityChange(1.0) },
-                    )
-                    CardAction(
-                        icon = Icons.Filled.Edit,
-                        label = "编辑",
-                        onClick = onEdit,
-                    )
-                    CardAction(
-                        icon = Icons.Filled.Archive,
-                        label = "用完",
-                        onClick = onArchive,
-                    )
-                    CardAction(
-                        icon = Icons.Filled.Delete,
-                        label = "删除",
-                        tint = MaterialTheme.colorScheme.error,
-                        onClick = onDelete,
-                    )
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically) {
+                    TextButton(onClick = onQuantityChange) { Text("修改余量") }
+                    TextButton(onClick = onEdit) { Text("编辑") }
+                    Box {
+                        IconButton(onClick = { showMore = true }) {
+                            Icon(Icons.Filled.MoreVert, contentDescription = "更多操作：${item.name}")
+                        }
+                        DropdownMenu(expanded = showMore, onDismissRequest = { showMore = false }) {
+                            DropdownMenuItem(text = { Text("归档（已用完 / 丢弃）") },
+                                onClick = { showMore = false; onArchive() })
+                            DropdownMenuItem(text = { Text("永久删除", color = MaterialTheme.colorScheme.error) },
+                                onClick = { showMore = false; onDelete() })
+                        }
+                    }
                 }
             }
         }
-    }
-}
-
-/** 卡片里的操作按钮：加大图标 + 文字说明 */
-@Composable
-private fun CardAction(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    label: String,
-    onClick: () -> Unit,
-    enabled: Boolean = true,
-    tint: Color = MaterialTheme.colorScheme.onSurfaceVariant,
-) {
-    val contentColor = if (enabled) tint else tint.copy(alpha = 0.38f)
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-    ) {
-        Icon(
-            imageVector = icon,
-            contentDescription = label,
-            modifier = Modifier.size(24.dp),
-            tint = contentColor,
-        )
-        Spacer(Modifier.height(2.dp))
-        Text(
-            text = label,
-            style = MaterialTheme.typography.labelSmall,
-            color = contentColor,
-        )
     }
 }
 

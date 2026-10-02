@@ -28,7 +28,7 @@ class ScanEntryState {
     var saveMessage by mutableStateOf("")
 
     fun snapshot() = Snapshot(
-        ArrayList(drafts), manual.item, rawText.take(12_000), lastParsedCount, lastSingleItemMode,
+        ArrayList(drafts), manual.item, rawText.take(12_000), lastParsedCount, lastSingleItemMode, HashSet(manual.protectedFields),
     )
 
     data class Snapshot(
@@ -37,6 +37,7 @@ class ScanEntryState {
         val rawText: String,
         val parsedCount: Int,
         val singleItemMode: Boolean,
+        val protectedFields: HashSet<String> = hashSetOf(),
     ) : java.io.Serializable
 
     /** 待入库草稿（拍照 / 语音产生；手工录入不经过这里） */
@@ -85,6 +86,31 @@ class ScanEntryState {
         if (newDrafts.isNotEmpty()) drafts.addAll(newDrafts)
     }
 
+    /** 补日期只作用于唯一待入库草稿；多条时不猜目标，也不创建无名称记录。 */
+    fun supplementDates(incoming: List<FoodDraft>): Boolean {
+        if (saving || drafts.size != 1 || incoming.size != 1) return false
+        val current = drafts.single()
+        val result = incoming.single()
+        val production = current.productionDate ?: result.productionDate.takeUnless { com.example.foodmanager.core.FoodField.PRODUCTION in current.protectedFields }
+        val expiry = current.expiryDate ?: result.expiryDate.takeUnless {
+            com.example.foodmanager.core.FoodField.EXPIRY in current.protectedFields ||
+                (result.expiryDerivedFromProduction && production != result.productionDate) ||
+                (it != null && production != null && it < production)
+        }
+        drafts[0] = current.copy(productionDate = production, expiryDate = expiry)
+        return production != current.productionDate || expiry != current.expiryDate
+    }
+
+    fun updateDraft(updated: FoodDraft) {
+        val i = drafts.indexOfFirst { it.draftId == updated.draftId }
+        if (i < 0 || saving) return
+        val old = drafts[i]
+        val fields = old.protectedFields.toMutableSet()
+        if (old.productionDate != updated.productionDate) fields += com.example.foodmanager.core.FoodField.PRODUCTION
+        if (old.expiryDate != updated.expiryDate) fields += com.example.foodmanager.core.FoodField.EXPIRY
+        drafts[i] = updated.copy(protectedFields = fields)
+    }
+
     /** 记录一次拍照识别的结果，供设置页展示诊断信息 */
     fun recordOcrResult(parsedCount: Int, singleItemMode: Boolean) {
         lastParsedCount = parsedCount
@@ -106,7 +132,7 @@ class ScanEntryState {
             if (snapshot != null) {
                 drafts.addAll(snapshot.drafts)
                 FoodDraft.reserveIdsThrough(snapshot.drafts.maxOfOrNull { it.draftId } ?: 0L)
-                manual.update(snapshot.manual)
+                manual.restore(snapshot.manual, snapshot.protectedFields)
                 rawText = snapshot.rawText
                 lastParsedCount = snapshot.parsedCount
                 lastSingleItemMode = snapshot.singleItemMode

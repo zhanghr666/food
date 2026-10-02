@@ -26,7 +26,12 @@ object DatabaseMigrations {
         object : Migration(version, 8) {
             override fun migrate(db: SupportSQLiteDatabase) = upgradeTo8(db)
         }
-    }.toTypedArray()
+    }.plus(object : Migration(8, 9) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE food_items ADD COLUMN quantitySpecified INTEGER NOT NULL DEFAULT 0")
+            db.execSQL("UPDATE food_items SET quantitySpecified = CASE WHEN quantity > 0 THEN 1 ELSE 0 END")
+        }
+    }).toTypedArray()
 
     private fun upgradeTo8(db: SupportSQLiteDatabase) {
         val existing = mutableSetOf<String>()

@@ -30,8 +30,8 @@ val OnSurfaceDark = Color(0xFFF1DFD8)
 
 /** 状态配色（列表里的圆点与标签） */
 object StatusColors {
-    val expired = Color(0xFFD32F2F)
-    val expiring = Color(0xFFE8A33D)
-    val fresh = Color(0xFF3E9C6E)
-    val noExpiry = Color(0xFF8A8A8A)
+    val expired: Color @androidx.compose.runtime.Composable get() = androidx.compose.material3.MaterialTheme.colorScheme.error
+    val expiring: Color @androidx.compose.runtime.Composable get() = androidx.compose.material3.MaterialTheme.colorScheme.tertiary
+    val fresh: Color @androidx.compose.runtime.Composable get() = androidx.compose.material3.MaterialTheme.colorScheme.secondary
+    val noExpiry: Color @androidx.compose.runtime.Composable get() = androidx.compose.material3.MaterialTheme.colorScheme.onSurfaceVariant
 }

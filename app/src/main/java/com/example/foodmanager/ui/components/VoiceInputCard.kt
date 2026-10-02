@@ -182,13 +182,14 @@ fun VoiceInputCard(
                 VoiceState.Idle -> {
                     listening = false
                     preparing = false
+                    processing = false
                 }
             }
         }
     }
 
     DisposableEffect(Unit) {
-        onDispose { recognizer.stop() }
+        onDispose { recognizer.releaseModel() }
     }
 
     val infinite = rememberInfiniteTransition(label = "voice")
@@ -292,6 +293,8 @@ fun VoiceInputCard(
                                     return@awaitEachGesture
                                 }
 
+                                if (processing) return@awaitEachGesture
+                                finished = false
                                 // 开始录音（首次会先准备离线模型）
                                 status = "正在启动…"
                                 liveText = ""

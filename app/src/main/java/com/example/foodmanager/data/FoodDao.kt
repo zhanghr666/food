@@ -79,12 +79,12 @@ interface FoodDao {
     suspend fun deleteById(id: Long)
 
     @Query("UPDATE food_items SET archived = :archived, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun setArchived(id: Long, archived: Boolean, updatedAt: Long = System.currentTimeMillis())
+    suspend fun setArchived(id: Long, archived: Boolean, updatedAt: Long = System.currentTimeMillis()): Int
 
-    @Query("UPDATE food_items SET quantity = :quantity, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateQuantity(id: Long, quantity: Double, updatedAt: Long = System.currentTimeMillis())
+    @Query("UPDATE food_items SET quantity = :quantity, quantitySpecified = :specified, updatedAt = :updatedAt WHERE id = :id")
+    suspend fun updateQuantity(id: Long, quantity: Double, specified: Boolean = true, updatedAt: Long = System.currentTimeMillis()): Int
 
-    @Query("UPDATE food_items SET quantity = MAX(0, quantity + :delta), updatedAt = :updatedAt WHERE id = :id")
+    @Query("UPDATE food_items SET quantity = MAX(0, quantity + :delta), quantitySpecified = 1, updatedAt = :updatedAt WHERE id = :id")
     suspend fun incrementQuantity(id: Long, delta: Double, updatedAt: Long = System.currentTimeMillis())
 
     @Query("DELETE FROM food_items")

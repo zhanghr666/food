@@ -84,6 +84,7 @@ fun SettingsScreen(
     }
 
     var showClearDialog by remember { mutableStateOf(false) }
+    var showDiagnostics by androidx.compose.runtime.saveable.rememberSaveable { mutableStateOf(false) }
     var checkResult by remember { mutableStateOf("") }
 
     Scaffold(
@@ -239,18 +240,6 @@ fun SettingsScreen(
                 InfoRow("已归档（已用完/丢弃）", "${archived.size} 件")
                 InfoRow("分类数量", "${stats.categories} 个")
                 InfoRow("存放位置数量", "${stats.locations} 个")
-                InfoRow("待入库暂存", "${scanState.drafts.size} 条")
-                InfoRow(
-                    "拍照识别模式",
-                    if (settings.ocrSingleItem) "一张照片一条" else "按行拆分（小票模式）",
-                )
-                if (scanState.lastParsedCount >= 0) {
-                    InfoRow(
-                        "上次拍照解析结果",
-                        "${scanState.lastParsedCount} 条" +
-                            if (scanState.lastSingleItemMode) "（单件模式）" else "（拆分模式）",
-                    )
-                }
                 Spacer(Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     TextButton(onClick = onOpenArchived) {
@@ -272,6 +261,15 @@ fun SettingsScreen(
             }
 
             Spacer(Modifier.height(8.dp))
+            SettingsSection(icon = Icons.Filled.Storage, title = "帮助与诊断", subtitle = "遇到识别问题时再展开查看") {
+                TextButton(onClick = { showDiagnostics = !showDiagnostics }) { Text(if (showDiagnostics) "收起诊断信息" else "展开诊断信息") }
+                if (showDiagnostics) {
+                    InfoRow("待入库暂存", "${scanState.drafts.size} 条")
+                    InfoRow("拍照识别模式", if (settings.ocrSingleItem) "一张照片一条" else "按行拆分")
+                    if (scanState.lastParsedCount >= 0) InfoRow("上次解析结果", "${scanState.lastParsedCount} 条")
+                    Text("识别结果需要核对，尤其是日期。未设置到期日的记录不会触发临期提醒。", style = MaterialTheme.typography.bodyMedium)
+                }
+            }
             Text(
                 // 版本号从 APK 读取，避免硬编码导致与实际版本不一致
                 text = "食物存储管理 v${appVersionName(context)}　·　本地离线运行",
@@ -366,7 +364,7 @@ fun ArchivedScreen(
                             Text(item.name, style = MaterialTheme.typography.titleMedium)
                             Text(
                                 text = com.example.foodmanager.ui.components.joinInfo(
-                                    com.example.foodmanager.ui.components.describeQuantityText(item.quantity, item.unit),
+                                    com.example.foodmanager.ui.components.describeQuantityText(item.quantity, item.unit, item.quantitySpecified),
                                     item.location,
                                 ),
                                 style = MaterialTheme.typography.labelSmall,

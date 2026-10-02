@@ -23,6 +23,10 @@ data class FoodItem(
     /** 数量 */
     val quantity: Double = 1.0,
 
+    /** 区分未填写与明确填写的零；历史零数量迁移为未填写。 */
+    @androidx.room.ColumnInfo(defaultValue = "0")
+    val quantitySpecified: Boolean = quantity > 0,
+
     /** 单位，如：瓶、盒、袋、个、克 */
     val unit: String = "个",
 
@@ -32,7 +36,7 @@ data class FoodItem(
     /** 生产日期，可为空 */
     val productionDate: Long? = null,
 
-    /** 保质期截止日期，可为空（无保质期则永不提醒） */
+    /** 保质期截止日期，可为空（未设置到期日则永不提醒） */
     val expiryDate: Long? = null,
 
     /** 存放位置，如：冰箱冷藏 / 冰箱冷冻 / 常温储物柜 */
@@ -51,7 +55,7 @@ data class FoodItem(
     val createdAt: Long = System.currentTimeMillis(),
     val updatedAt: Long = System.currentTimeMillis(),
 ) : java.io.Serializable {
-    /** 距离过期还有多少天：正数=还剩，0=今天到期，负数=已过期；无保质期返回 null */
+    /** 距离过期还有多少天：正数=还剩，0=今天到期，负数=已过期；未设置到期日返回 null */
     fun daysToExpiry(today: Long = DateUtils.today()): Long? {
         val expiry = expiryDate ?: return null
         return DateUtils.daysBetween(today, expiry)
@@ -83,8 +87,8 @@ data class FoodItem(
 enum class FoodStatus(val label: String) {
     EXPIRED("已过期"),
     EXPIRING_SOON("即将过期"),
-    FRESH("新鲜"),
-    NO_EXPIRY("无保质期"),
+    FRESH("未临期"),
+    NO_EXPIRY("未设置到期日"),
 }
 
 /** 常用单位 */

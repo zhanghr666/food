@@ -111,7 +111,7 @@ object DateUtils {
 
     /** 人类可读的剩余天数描述 */
     fun describeRemaining(days: Long?): String = when {
-        days == null -> "无保质期"
+        days == null -> "未设置到期日"
         days < 0 -> "已过期 ${-days} 天"
         days == 0L -> "今天到期"
         days == 1L -> "明天到期"

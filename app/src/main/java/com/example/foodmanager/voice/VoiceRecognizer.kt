@@ -11,6 +11,9 @@ import android.util.Log
 import com.example.foodmanager.data.AppDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.BufferOverflow
@@ -69,6 +72,9 @@ class VoiceRecognizer(private val context: Context) {
     private var audioRecord: AudioRecord? = null
     private var captureJob: Job? = null
     private var startJob: Job? = null
+    private val lifecycle = Mutex()
+    @Volatile private var processing = false
+    private var transcript = VoiceTranscript()
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val busy = AtomicBoolean(false)
@@ -124,33 +130,40 @@ class VoiceRecognizer(private val context: Context) {
      * 预热模型：进入录入页时调用，避免第一次按住时等待。
      */
     fun warmUp() {
-        if (model != null || busy.get()) return
-        scope.launch { runCatching { ensureModel() } }
+        scope.launch { lifecycle.withLock { ensureModel() } }
     }
 
+    @Synchronized
     fun start() {
-        if (holdActive) return
+        if (holdActive || processing) return
         holdActive = true
-        sessionId++
+        val generation = ++sessionId
         lastText = ""
         lastPartialEmitted = ""
         startJob = scope.launch {
-            try {
-                if (model == null) {
-                    _state.tryEmit(VoiceState.Preparing)
-                }
-                val loaded = ensureModel()
-                if (!holdActive) return@launch
-                if (loaded == null) {
-                    _state.tryEmit(VoiceState.Error("离线语音模型加载失败，请重装应用或改用文字录入"))
+            lifecycle.withLock {
+                if (generation != sessionId || !holdActive) return@withLock
+                try {
+                    if (model == null) _state.tryEmit(VoiceState.Preparing)
+                    val loaded = ensureModel()
+                    if (generation != sessionId || !holdActive) return@withLock
+                    if (loaded == null) {
+                        holdActive = false
+                        _state.tryEmit(VoiceState.Error("离线语音模型加载失败，请重装应用或改用文字录入"))
+                        return@withLock
+                    }
+                    refreshGrammar()
+                    if (generation != sessionId || !holdActive) return@withLock
+                    transcript = VoiceTranscript()
+                    startListening(loaded)
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (t: Exception) {
                     holdActive = false
-                    return@launch
+                    closeCapture()
+                    _state.tryEmit(VoiceState.Error("启动语音识别失败，请重试"))
+                    Log.e(TAG, "启动识别失败", t)
                 }
-                startListening(loaded)
-            } catch (t: Throwable) {
-                Log.e(TAG, "启动识别失败", t)
-                holdActive = false
-                _state.tryEmit(VoiceState.Error("启动语音识别失败：${t.message ?: t.javaClass.simpleName}"))
             }
         }
     }
@@ -163,8 +176,7 @@ class VoiceRecognizer(private val context: Context) {
             return
         }
         val rec = Recognizer(loaded, SAMPLE_RATE)
-        // 注入领域语法：解码时只能从食物/单位/位置/时间词里选，
-        // 从根上避免通用模型把「西瓜」猜成「吸管」这类同音字错误。
+        // 每轮使用最新词表。词表只辅助解码，不能保证同音词一定正确。
         if (grammarJson != null) {
             runCatching { rec.setGrammar(grammarJson) }
                 .onSuccess { Log.i(TAG, "已启用领域语法约束（${grammarWordCount} 个词条）") }
@@ -219,101 +231,103 @@ class VoiceRecognizer(private val context: Context) {
         }
         _state.tryEmit(VoiceState.Listening)
 
+        val generation = sessionId
+        val currentTranscript = transcript
         captureJob = scope.launch {
-            val buffer = ShortArray(bufferSize / 2)
-            var peak = 0
-            var lastReport = 0L
-            var frames = 0L
+            val buffer = ShortArray(1600) // 每批最多 100ms，避免一秒阻塞读吞掉尾音。
+            var tailBatches = 0
             try {
-                while (isActive && holdActive) {
-                    val read = record.read(buffer, 0, buffer.size)
-                    if (read <= 0) break
-                    frames += read
-                    val target = recognizer ?: break
-                    target.acceptWaveForm(buffer, read)
-
-                    for (i in 0 until read) {
-                        val abs = kotlin.math.abs(buffer[i].toInt())
-                        if (abs > peak) peak = abs
+                while (isActive && generation == sessionId) {
+                    val read = record.read(buffer, 0, buffer.size, AudioRecord.READ_NON_BLOCKING)
+                    if (read < 0) break
+                    if (read == 0) {
+                        if (!holdActive) break
+                        delay(10)
+                        continue
                     }
-                    // 边识别边出实时文字（先做同音字校正，界面直接显示干净文本）
-                    val partial = VoicePhoneticCorrector.correct(extractText(target.partialResult, "partial"))
-                    if (partial.isNotBlank() && partial != lastPartialEmitted) {
-                        lastPartialEmitted = partial
-                        lastText = partial
-                        Log.i(TAG, "实时：$partial")
-                        _state.tryEmit(VoiceState.Partial(partial))
+                    val text = if (rec.acceptWaveForm(buffer, read)) {
+                        currentTranscript.acceptCompleted(extractText(rec.result, "text"))
+                    } else currentTranscript.acceptPartial(extractText(rec.partialResult, "partial"))
+                    lastText = text
+                    if (text.isNotBlank() && text != lastPartialEmitted && generation == sessionId) {
+                        lastPartialEmitted = text
+                        _state.tryEmit(VoiceState.Partial(text))
                     }
-                    val now = System.currentTimeMillis()
-                    if (now - lastReport >= 2000L) {
-                        lastReport = now
-                        Log.i(TAG, "采集中：${frames * 1000 / 16000}ms 音频，峰值=$peak/32767")
-                        peak = 0
-                    }
+                    // 松手后送完已经缓存的音频；有界排空，避免一直录入后续环境声音。
+                    if (!holdActive && ++tailBatches >= 10) break
                 }
-            } catch (t: Throwable) {
+            } catch (t: Exception) {
                 Log.e(TAG, "采集线程异常", t)
             }
         }
     }
 
-    /** 松手：停止采集，取最终结果（只提交一次） */
+    /** 收尾与启动/释放串行；先等待采集结束，再读取 final，最后关闭原生对象。 */
+    @Synchronized
     fun finish() {
+        if (!holdActive || processing) return
         holdActive = false
-        val record = audioRecord
-        audioRecord = null
-        val rec = recognizer
-        recognizer = null
-
-        if (rec == null) {
-            _state.tryEmit(VoiceState.Idle)
-            return
-        }
+        processing = true
+        val generation = sessionId
         _state.tryEmit(VoiceState.Processing)
         scope.launch {
-            captureJob?.cancel()
-            captureJob = null
-            runCatching { record?.stop() }
-            runCatching { record?.release() }
-            // 等采集线程退出，确保最后的音频已经送进 recognizer
-            delay(150)
-            val text = VoicePhoneticCorrector.correct(
-                runCatching { extractText(rec.finalResult, "text") }.getOrDefault(""),
-            ).ifBlank { lastText.trim() }
-            runCatching { rec.close() }
-            if (text.isNotBlank()) {
-                lastText = text
-                Log.i(TAG, "松手提交：「$text」")
-                _state.tryEmit(VoiceState.Result(text, listOf(text)))
-            } else {
-                _state.tryEmit(VoiceState.Error("没有听清，请靠近手机再说一遍"))
+            lifecycle.withLock {
+                var outcome: VoiceState? = null
+                try {
+                    if (generation != sessionId) return@withLock
+                    val rec = recognizer
+                    captureJob?.join()
+                    runCatching { audioRecord?.stop() }
+                    val text = if (rec == null) "" else transcript.finish(extractText(rec.finalResult, "text"))
+                    if (generation != sessionId) return@withLock
+                    lastText = text
+                    outcome = if (text.isNotBlank()) VoiceState.Result(text)
+                    else VoiceState.Error("没有听清，请等到正在聆听后再说话")
+                } catch (t: Exception) {
+                    outcome = VoiceState.Error("语音处理失败，请重试")
+                    Log.e(TAG, "识别收尾失败", t)
+                } finally {
+                    closeCapture()
+                    if (generation == sessionId) processing = false
+                }
+                if (generation == sessionId) outcome?.let { _state.tryEmit(it) }
             }
         }
     }
 
-    /** 彻底释放（离开页面） */
-    fun stop() {
-        holdActive = false
-        startJob?.cancel()
-        startJob = null
-        captureJob?.cancel()
+    private suspend fun closeCapture() {
+        captureJob?.join()
         captureJob = null
-        val record = audioRecord
+        runCatching { audioRecord?.stop() }
+        runCatching { audioRecord?.release() }
         audioRecord = null
-        val rec = recognizer
+        runCatching { recognizer?.close() }
         recognizer = null
-        scope.launch {
-            runCatching { record?.stop() }
-            runCatching { record?.release() }
-            runCatching { rec?.close() }
-        }
     }
 
-    /** 释放模型（App 退出时可调用） */
-    fun releaseModel() {
-        stop()
-        runCatching { model?.close() }
-        model = null
+    @Synchronized
+    fun stop() = stopInternal(false)
+
+    @Synchronized
+    fun releaseModel() = stopInternal(true)
+
+    private fun stopInternal(release: Boolean) {
+        holdActive = false
+        processing = true
+        val generation = ++sessionId
+        scope.launch {
+            lifecycle.withLock {
+                closeCapture()
+                if (release) {
+                    runCatching { model?.close() }
+                    model = null
+                }
+                if (generation == sessionId) {
+                    processing = false
+                    _state.tryEmit(VoiceState.Idle)
+                }
+            }
+        }
     }
 
     // ------------------------------------------------------------------
@@ -341,6 +355,27 @@ class VoiceRecognizer(private val context: Context) {
             )
         }
     }.getOrElse { GrammarWords(emptyList(), emptyList()) }
+
+    private fun refreshGrammar() {
+            // 生成语法词表：把用户维护的常用位置/食品（含别名）纳入
+            // 指纹变化时重建 —— 这样在设置里改了别名，下一次说话就生效，不必重启
+            val wordSource = readGrammarWords()
+            val signature = wordSource.locations.joinToString("|") +
+                "#" + wordSource.foods.joinToString("|")
+            if (grammarJson == null || grammarSignature != signature) {
+                runCatching {
+                    VoiceGrammar.build(wordSource.locations, wordSource.foods)
+                }
+                    .onSuccess {
+                        grammarJson = it
+                        grammarSignature = signature
+                        grammarWordCount = it.count { c -> c == ',' } + 1
+                        Log.i(TAG, "领域语法词表生成完成，共 $grammarWordCount 个词条")
+                    }
+                    .onFailure { Log.w(TAG, "语法词表生成失败，将使用自由解码", it) }
+            }
+
+    }
 
     private data class GrammarWords(val locations: List<String>, val foods: List<String>)
 
@@ -406,23 +441,6 @@ class VoiceRecognizer(private val context: Context) {
                         Log.i(TAG, "已清理旧位置的模型目录（移出备份范围）")
                     }
                 }
-            }
-            // 生成语法词表：把用户维护的常用位置/食品（含别名）纳入
-            // 指纹变化时重建 —— 这样在设置里改了别名，下一次说话就生效，不必重启
-            val wordSource = readGrammarWords()
-            val signature = wordSource.locations.joinToString("|") +
-                "#" + wordSource.foods.joinToString("|")
-            if (grammarJson == null || grammarSignature != signature) {
-                runCatching {
-                    VoiceGrammar.build(wordSource.locations, wordSource.foods)
-                }
-                    .onSuccess {
-                        grammarJson = it
-                        grammarSignature = signature
-                        grammarWordCount = it.count { c -> c == ',' } + 1
-                        Log.i(TAG, "领域语法词表生成完成，共 $grammarWordCount 个词条")
-                    }
-                    .onFailure { Log.w(TAG, "语法词表生成失败，将使用自由解码", it) }
             }
             Log.i(TAG, "离线模型就绪=${model != null}")
             model

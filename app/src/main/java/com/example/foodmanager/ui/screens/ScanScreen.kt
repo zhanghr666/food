@@ -200,9 +200,15 @@ fun ScanScreen(
                         title = "拍照录入",
                         singleItemMode = ocrSingleItem,
                         customFoods = customFoods,
+                        foodAliases = foodAliases,
                         onRecognized = { text, parsed ->
                             state.rawText = text
                             state.recordOcrResult(parsed.size, ocrSingleItem)
+                            if (parsed.isNotEmpty() && parsed.all { it.dateOnly }) {
+                                statusText = if (state.supplementDates(parsed)) "已补充日期，请核对后入库"
+                                else "未自动覆盖日期，请在对应记录中填写；识别原文已保留"
+                                return@PhotoInputCard
+                            }
                             state.addDrafts(parsed)
                             statusText = if (parsed.isEmpty()) {
                                 "没有从图片里识别到食物信息，可换一张或手工录入"
@@ -355,8 +361,7 @@ fun ScanScreen(
                         draft = draft,
                         customLocations = customLocations,
                         onUpdate = { updated ->
-                            val i = drafts.indexOfFirst { it.draftId == updated.draftId }
-                            if (i >= 0 && !state.saving) drafts[i] = updated
+                            state.updateDraft(updated)
                         },
                         onRemove = {
                             drafts.removeAll { it.draftId == draft.draftId }
@@ -497,7 +502,7 @@ private fun DraftCard(
                     modifier = Modifier.weight(1f),
                 )
                 Text(
-                    text = "${com.example.foodmanager.ui.components.formatQuantity(draft.quantity)}${draft.unit}",
+                    text = com.example.foodmanager.ui.components.describeQuantityText(draft.quantity, draft.unit, draft.quantitySpecified),
                     style = MaterialTheme.typography.bodyMedium,
                     color = MaterialTheme.colorScheme.primary,
                 )
@@ -527,15 +532,25 @@ private fun DraftCard(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
 
-            if (draft.highlights.isNotEmpty()) {
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "识别字段：" + draft.highlights.joinToString("、") +
-                        "（置信度 ${(draft.confidence * 100).toInt()}%）",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
+            Spacer(Modifier.height(8.dp))
+            Text(
+                text = buildString {
+                    val missing = buildList {
+                        if (draft.name.isBlank()) add("名称")
+                        if (!draft.quantitySpecified) add("数量")
+                        if (draft.expiryDate == null) add("到期日")
+                        if (draft.location.isBlank()) add("存放位置")
+                    }
+                    append(if (missing.isEmpty()) "字段已填齐，保存前请核对" else "待补充：" + missing.joinToString("、"))
+                    append("\n日期来源：")
+                    append(if (draft.source == "voice") "语音解析或推算" else if (draft.source == "ocr") "图片文字解析或推算" else "手工输入")
+                    append("；修改后的值以当前填写为准。")
+                    append("\n请对照包装核对生产日期与到期日；未设置到期日不会提醒。")
+                    if (draft.highlights.isNotEmpty()) append("\n解析命中：" + draft.highlights.joinToString("、"))
+                },
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
 
             if (editing) {
                 Spacer(Modifier.height(8.dp))
@@ -549,15 +564,16 @@ private fun DraftCard(
                 Spacer(Modifier.height(6.dp))
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // 数量用独立文本状态：绑定数值会导致清空时"跳回"旧数字
-                    var qtyText by remember(draft) {
-                        mutableStateOf(initialQuantityText(draft.quantity))
+                    var qtyText by remember(draft.draftId) {
+                        mutableStateOf(if (draft.quantitySpecified) initialQuantityText(draft.quantity) else "")
                     }
                     OutlinedTextField(
                         value = qtyText,
                         onValueChange = { raw ->
                             val cleaned = raw.filter { it.isDigit() || it == '.' }
+                            if (cleaned.count { it == '.' } > 1 || cleaned.toDoubleOrNull()?.isFinite() == false) return@OutlinedTextField
                             qtyText = cleaned
-                            onUpdate(draft.copy(quantity = cleaned.toDoubleOrNull() ?: 0.0))
+                            onUpdate(draft.copy(quantity = cleaned.toDoubleOrNull() ?: 0.0, quantitySpecified = cleaned.toDoubleOrNull() != null))
                         },
                         label = { Text("数量") },
                         singleLine = true,
@@ -656,7 +672,8 @@ private fun DraftCard(
 private fun FoodDraft.toFoodItem(defaultUnit: String): FoodItem = FoodItem(
     name = name.ifBlank { "未命名食物" },
     category = category,
-    quantity = if (quantity > 0) quantity else 1.0,
+    quantity = quantity,
+    quantitySpecified = quantitySpecified,
     unit = unit.ifBlank { defaultUnit },
     purchaseDate = purchaseDate,
     productionDate = productionDate,

@@ -1,11 +1,8 @@
 package com.example.foodmanager.voice
 
-import com.example.foodmanager.core.DateTextParser
 import com.example.foodmanager.core.DateUtils
 import com.example.foodmanager.core.FoodDraft
 import com.example.foodmanager.core.FoodField
-import com.example.foodmanager.core.NumberParser
-import com.example.foodmanager.core.ShelfLifeParser
 import com.example.foodmanager.ocr.OcrTextParser
 
 /**
@@ -82,62 +79,30 @@ object VoiceTextParser {
     ): FoodDraft? {
         if (raw.isBlank()) return null
         // 先做同音字校正（西瓜被听成吸管这类问题在这里兜住），用户自定义食品也参与校正
-        var text = VoicePhoneticCorrector.correct(raw, customFoods).trim()
+        var text = VoicePhoneticCorrector.correct(raw, customFoods + foodAliases.keys).replace(Regex("(?<=[\\p{IsHan}0-9]) +(?=[\\p{IsHan}0-9])"), "").trim()
         for (f in FILLER_PATTERNS) text = f.replace(text, "").trim()
         if (text.isBlank()) return null
 
         val highlights = mutableListOf<String>()
         var confidence = 0.5f
 
-        // ---------------- 保质期 / 日期 ----------------
-        var expiry: Long? = null
-        var production: Long? = null
-        val shelfLife = ShelfLifeParser.parse(text)
-
-        // 相对日期
-        val relative = findRelativeDate(text)
-        if (relative != null) {
-            expiry = relative.first
-            highlights += FoodField.EXPIRY
-            confidence += 0.1f
-        }
-
-        // 绝对日期（含「六月一号」这类中文日期）
-        if (expiry == null) {
-            val dateResult = findAbsoluteDate(text)
-            if (dateResult != null) {
-                val isPurchase = PURCHASE_WORDS.any { text.contains(it) }
-                if (isPurchase) {
-                    production = dateResult
-                    highlights += FoodField.PRODUCTION
-                } else {
-                    expiry = dateResult
-                    highlights += FoodField.EXPIRY
-                }
-                confidence += 0.1f
-            }
-        }
-
-        // 购买时间
-        val purchaseDate = findPurchaseDate(text) ?: DateUtils.today()
-        if (purchaseDate != DateUtils.today()) {
-            highlights += "买入时间"
-        }
-
-        // 生产日期 + 保质期 -> 过期日期
-        if (production != null && expiry == null && shelfLife != null) {
-            expiry = DateUtils.plusDays(production, shelfLife.days)
-            highlights += FoodField.EXPIRY
-        }
+        val dates = com.example.foodmanager.core.RecognitionDates.parse(text, voice = true)
+        val production = dates.production
+        val expiry = dates.expiry
+        val purchaseDate = dates.purchase ?: DateUtils.today()
+        if (production != null) highlights += FoodField.PRODUCTION
+        if (expiry != null) highlights += FoodField.EXPIRY
+        if (dates.purchase != null) highlights += FoodField.PURCHASE
 
         // ---------------- 位置（自定义位置优先，其次内置规则） ----------------
-        var location: String = matchCustomLocation(text, customLocations, locationAliases) ?: ""
+        val locationText = text.replace(Regex("(?:开封后|储存条件|贮存条件|建议保存|建议冷藏)[^，。；;\\n]*"), "")
+        var location: String = matchCustomLocation(locationText, customLocations, locationAliases) ?: ""
         if (location.isNotEmpty()) {
             highlights += FoodField.LOCATION
             confidence += 0.1f
         } else {
             for ((words, target) in LOCATION_RULES) {
-                if (words.any { text.contains(it) }) {
+                if (words.any { locationText.contains(it) }) {
                     location = target
                     highlights += FoodField.LOCATION
                     confidence += 0.05f
@@ -148,29 +113,25 @@ object VoiceTextParser {
 
         // ---------------- 名称（先算名称，数量提取需要避开名称里的字） ----------------
         // 把命中的位置名与别名一并从文本里剔除，避免别名（如"冷藏"）混进食物名称
-        val name = extractName(text, location, null, customLocations + locationAliases.keys)
+        val nameText = dates.matched.fold(text) { value, matched -> value.replace(matched, " ") }
+        val foodMatch = (customFoods.map { it to it } + foodAliases.entries.map { it.key to it.value })
+            .filter { it.first.isNotBlank() && it.second.isNotBlank() }
+            .sortedByDescending { it.first.length }.firstOrNull { nameText.contains(it.first) }
+        val suggestions = VoicePhoneticCorrector.suggestions(text, customFoods + foodAliases.keys)
+        val unresolvedName = suggestions.firstOrNull()?.substringAfter("原文“")?.substringBefore("”").orEmpty()
+        val name = foodMatch?.second ?: unresolvedName.ifBlank { extractName(nameText, location, null, customLocations + locationAliases.keys) }
         if (name.isNotBlank()) {
             highlights += FoodField.NAME
             confidence += 0.2f
         }
 
         // ---------------- 数量 + 单位 ----------------
-        val qty = findQuantity(text, name)
-        var quantity = qty.first
-        var unit = qty.second
-        if (quantity != null) {
-            highlights += FoodField.QUANTITY
-        }
-        if (unit != null) {
-            highlights += FoodField.UNIT
-        }
-        if (quantity == null && unit == null) {
-            val implicit = implicitQuantity(text)
-            quantity = implicit.first
-            unit = implicit.second
-            if (quantity != null) highlights += FoodField.QUANTITY
-            if (unit != null) highlights += FoodField.UNIT
-        }
+        val quantityText = foodMatch?.first?.let { text.replace(it, " ") } ?: text
+        val qty = com.example.foodmanager.core.RecognitionQuantity.parse(quantityText, voice = true)
+        val quantity = qty.amount
+        val unit = qty.unit
+        if (quantity != null) highlights += FoodField.QUANTITY
+        if (unit != null) highlights += FoodField.UNIT
 
         // ---------------- 分类 ----------------
         var category = ""
@@ -185,6 +146,11 @@ object VoiceTextParser {
             note = m.groupValues[2].trim()
         }
 
+        val storageAdvice = Regex("(?:开封后|储存条件|贮存条件|建议保存|建议冷藏)[^，。；;\\n]*").find(text)?.value.orEmpty()
+        note = (listOf(note, storageAdvice) + dates.warnings + qty.notes + suggestions)
+            .filter { it.isNotBlank() }.joinToString("；")
+        if (text != raw.trim()) note = listOf(note, "语音原文：$raw").filter { it.isNotBlank() }.joinToString("；")
+
         if (category.isBlank()) {
             category = OcrTextParser.categoryOf(name)
         }
@@ -196,129 +162,20 @@ object VoiceTextParser {
             name = name,
             category = category,
             quantity = quantity ?: 1.0,
+            quantitySpecified = quantity != null,
             unit = unit ?: "个",
             purchaseDate = purchaseDate,
+            purchaseDateSpecified = dates.purchase != null,
+            rawText = raw,
             productionDate = production,
             expiryDate = expiry,
+            expiryDerivedFromProduction = dates.expiryDerivedFromProduction,
             location = location,
             note = note,
             source = defaultSource,
             highlights = highlights.distinct(),
             confidence = confidence.coerceIn(0f, 1f),
         )
-    }
-
-    /**
-     * 抽取数量与单位。
-     *
-     * 一句话里可能出现多个数量（"一箱牛奶三十盒"）：
-     * 中文习惯是**先说包装、后说实际数量**，所以取"数字表示最长"的那个，
-     * 相同则取更靠后的 —— 即上例取 30 盒，而不是 1 箱。
-     *
-     * 注意：[nameToIgnore] 是已识别出的食物名（如"牛奶"），要先把名字从文本里剔除，
-     * 否则"牛奶"里的"奶"会被当成量词，抢走后面的"盒"。
-     */
-    internal fun findQuantity(text: String, nameToIgnore: String): Pair<Double?, String?> {
-        // Vosk 输出是空格分词的（"牛 奶"），名字里可能没有空格，所以要容忍字符间空格
-        val scanText = if (nameToIgnore.isNotBlank()) {
-            val pattern = nameToIgnore.toCharArray().joinToString("\\s*") { Regex.escape(it.toString()) }
-            runCatching { text.replace(Regex(pattern), " ") }.getOrDefault(text)
-        } else {
-            text
-        }
-        val matches = QTY_PATTERN.findAll(scanText).toList()
-        if (matches.isEmpty()) return null to null
-
-        data class Best(val value: Double, val unit: String, val digits: Int, val start: Int)
-
-        var best: Best? = null
-        for (m in matches) {
-            val numberText = m.groupValues[1]
-            val value = NumberParser.parse(numberText) ?: continue
-            val unit = normalizeUnit(m.groupValues[2])
-            // 过滤掉"落在食物名里"的假量词（"一箱牛奶"里的"奶"）
-            if (NumberParser.isChineseNumber(numberText) && isInsideFoodName(scanText, m.range.last)) continue
-            val digits = numberText.length
-            val start = m.range.first
-            val current = best
-            if (current == null || digits > current.digits ||
-                (digits == current.digits && start > current.start)
-            ) {
-                best = Best(value, unit, digits, start)
-            }
-        }
-        return if (best == null) null to null else best.value to best.unit
-    }
-
-    /** 位置 [index] 是否落在某个食物关键词内部（用于排除名字里的字被当作量词） */
-    internal fun debugInsideFoodName(text: String, index: Int): Boolean = isInsideFoodName(text, index)
-
-    /** 位置 [index] 是否落在某个食物关键词内部（用于排除名字里的字被当作量词） */
-    private fun isInsideFoodName(text: String, index: Int): Boolean {
-        if (index < 0 || index >= text.length) return false
-        for (kw in OcrTextParser.foodKeywordNames()) {
-            if (kw.length < 2) continue
-            var from = 0
-            while (true) {
-                val at = text.indexOf(kw, from)
-                if (at < 0) break
-                if (index in at until (at + kw.length)) return true
-                from = at + 1
-            }
-        }
-        return false
-    }
-
-    /** 没有数量时，只要出现单位词就补一个默认单位 */
-    private fun implicitQuantity(text: String): Pair<Double?, String?> {
-        for ((words, target) in UNIT_RULES) {
-            if (words.any { text.contains(it) }) return null to target
-        }
-        return null to null
-    }
-
-    private fun normalizeUnit(unitText: String): String =
-        UNIT_RULES.firstOrNull { it.first.any { a -> a.equals(unitText, ignoreCase = true) } }?.second
-            ?: unitText
-
-    /** 数量 + 单位 的匹配模式（数词或阿拉伯数字 + 量词） */
-    private val QTY_PATTERN = Regex(
-        "(\\d+(?:\\.\\d+)?|[零〇一二两三四五六七八九十百]+)\\s*" +
-            "(袋|包|盒|箱|瓶|支|罐|听|桶|个|只|枚|颗|粒|根|条|头|斤|千克|公斤|kg|KG|克|g|毫升|ml|ML|升|L|把|捆|扎|块|份|片)"
-    )
-
-    /** 绝对日期：优先标准格式，其次「六月一号」「六月一日」这类全中文日期 */
-    private fun findAbsoluteDate(text: String): Long? {
-        DateTextParser.findFirst(text)?.let { return it.date }
-        DateTextParser.findCompact6(text)?.let { return it.date }
-
-        // 六月一号 / 6月1号 / 六月一日
-        Regex("([0-9]{1,2}|[一二三四五六七八九十]{1,3})\\s*月\\s*([0-9]{1,2}|[一二三四五六七八九十〇零]{1,3})\\s*[日号]").find(text)?.let { m ->
-            val month = NumberParser.parse(m.groupValues[1])?.toInt()
-            val day = NumberParser.parse(m.groupValues[2])?.toInt()
-            if (month != null && day != null && month in 1..12 && day in 1..31) {
-                return DateUtils.of(inferYear(month, day), month, day)
-            }
-        }
-        // 只有「一号」这类日期，取本月
-        Regex("([0-9]{1,2}|[一二三四五六七八九十]{1,3})\\s*[日号]\\s*(过期|到期)").find(text)?.let { m ->
-            val day = NumberParser.parse(m.groupValues[1])?.toInt()
-            val today = DateUtils.today()
-            val month = DateUtils.month(today)
-            if (day != null && day in 1..31) {
-                val candidate = DateUtils.of(DateUtils.year(today), month, day)
-                return if (candidate >= today) candidate else DateUtils.of(inferYear(month, day), month, day)
-            }
-        }
-        return null
-    }
-
-    /** 与 DateTextParser 一致：无年份时推断最近一次出现该日期的年份 */
-    private fun inferYear(month: Int, day: Int): Int {
-        val today = DateUtils.today()
-        val thisYear = DateUtils.year(today)
-        val candidate = DateUtils.of(thisYear, month, day)
-        return if (DateUtils.daysBetween(candidate, today) > 180) thisYear + 1 else thisYear
     }
 
     /** 调试用：只跑名称抽取 */
@@ -336,11 +193,27 @@ object VoiceTextParser {
         // 用「不消耗分隔符」的方式切分：「还有三天过期」里的"还有"后面跟着时间量词，
         // 不能当成两条记录的分隔词（否则一句话会被拆成"有名称没日期"+"有日期没名称"两条残缺记录）。
         val separators = Regex(
-            "[；;、，,]|另外|然后|以及|" +
+            "[；;、]|另外|然后|以及|" +
                 // 「还有」只有在后面不跟时间量词时才算分隔词
-                "还有(?![\\s]*(?:\\d+(?:\\.\\d+)?|[零〇一二两三四五六七八九十]{1,3})\\s*(?:个)?\\s*(?:个月|星期|周|天|日|小时))",
+                "还有(?![\\s]*(?:\\d+(?:\\.\\d+)?|[零〇一二两三四五六七八九十]{1,3})\\s*(?:个)?\\s*(?:个月|星期|周|天|日|小时|盒|箱|瓶|袋|个))",
         )
         val parts = separators.split(raw)
+            .flatMap { chunk ->
+                val words = OcrTextParser.foodKeywordNames(customFoods + foodAliases.keys).filter { it.length >= 2 }
+                fun foodIn(value: String) = words.filter { value.replace(" ", "").contains(it) }.maxByOrNull { it.length }
+                val records = mutableListOf<String>()
+                var current = ""
+                for (clause in chunk.split(Regex("[，,]"))) {
+                    val nextFood = foodIn(clause)
+                    val currentFood = foodIn(current)
+                    if (nextFood != null && currentFood != null && nextFood != currentFood) {
+                        records += current
+                        current = clause
+                    } else current = if (current.isBlank()) clause else "$current，$clause"
+                }
+                if (current.isNotBlank()) records += current
+                records
+            }
             .map { it.trim() }
             .filter { it.length >= 2 }
         val drafts = parts.mapNotNull {
@@ -375,7 +248,6 @@ object VoiceTextParser {
 
     // ------------------------------------------------------------------
 
-    private val PURCHASE_WORDS = listOf("买的", "买入", "购买", "购入", "今天买", "昨天买", "刚买")
 
     private val RELATIVE_RULES: List<Pair<String, Int>> = listOf(
         "大后天" to 3,
@@ -398,39 +270,6 @@ object VoiceTextParser {
         "一周后" to 7,
     )
 
-    private fun findRelativeDate(text: String): Pair<Long, String>? {
-        // 「还有三天过期」「三天后到期」
-        Regex("(还有|再过|过了)?\\s*([零〇一二三四五六七八九十\\d]{1,3})\\s*(天|日|周|个?星期|个月|月)\\s*(后|之后|以后)?\\s*(过期|到期|坏)").find(text)?.let { m ->
-            val value = NumberParser.parse(m.groupValues[2]) ?: return@let
-            val unit = m.groupValues[3]
-            val days = when {
-                unit.contains("周") || unit.contains("星期") -> (value * 7).toInt()
-                unit.contains("月") -> (value * 30).toInt()
-                else -> value.toInt()
-            }
-            return DateUtils.todayPlus(days) to m.value
-        }
-        for ((word, days) in RELATIVE_RULES.sortedByDescending { it.first.length }) {
-            if (text.contains(word)) {
-                // 「明天买的」是买入时间，不是过期时间
-                val index = text.indexOf(word)
-                val tail = text.substring(index + word.length, (index + word.length + 4).coerceAtMost(text.length))
-                val isPurchase = PURCHASE_WORDS.any { tail.contains(it.take(2)) } || tail.contains("买")
-                if (!isPurchase) return DateUtils.todayPlus(days) to word
-            }
-        }
-        return null
-    }
-
-    private fun findPurchaseDate(text: String): Long? {
-        if (!PURCHASE_WORDS.any { text.contains(it) }) return null
-        for ((word, days) in RELATIVE_RULES) {
-            if (text.contains(word)) return DateUtils.todayPlus(days)
-        }
-        val dateResult = DateTextParser.findFirst(text)
-        return dateResult?.date
-    }
-
     /**
      * 匹配用户自定义位置。支持后缀变体：配置了「茶几」时，
      * 说「茶几底下」「茶几下面」「茶几上」也能识别到「茶几」。
@@ -443,7 +282,7 @@ object VoiceTextParser {
         customLocations: List<String>,
         aliasMap: Map<String, String> = emptyMap(),
     ): String? {
-        if (customLocations.isEmpty()) return null
+        if (customLocations.isEmpty() && aliasMap.isEmpty()) return null
 
         // 候选项 = 正式名 + 别名；匹配到别名时返回它对应的正式名
         val candidates = buildList {
@@ -518,7 +357,7 @@ object VoiceTextParser {
         OcrTextParser.longestFoodKeyword(s)?.let { return it }
         // 2) 否则取剩下的第一段作为品名（过滤掉纯数量/单位，例如「三十」「盒」）
         val token = s.split(' ').firstOrNull { it.isNotBlank() }?.trim() ?: ""
-        if (isQuantityOnly(token)) return ""
+        if (isQuantityOnly(token) || token.equals("unk", ignoreCase = true)) return ""
         return token.take(16)
     }
 

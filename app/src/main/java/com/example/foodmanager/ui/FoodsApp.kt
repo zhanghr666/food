@@ -1,5 +1,6 @@
 package com.example.foodmanager.ui
 
+import androidx.compose.foundation.layout.consumeWindowInsets
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
@@ -162,7 +163,7 @@ fun FoodsApp(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding).consumeWindowInsets(padding),
         ) {
             when (fullScreen) {
                 FullScreen.Archived -> ArchivedScreen(

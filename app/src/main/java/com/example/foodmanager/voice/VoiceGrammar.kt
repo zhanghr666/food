@@ -1,22 +1,8 @@
 package com.example.foodmanager.voice
 
 import com.example.foodmanager.data.Categories
-import com.example.foodmanager.data.Locations
-import com.example.foodmanager.data.Units
 
-/**
- * 语音识别的**语法约束词表**。
- *
- * ## 为什么需要它
- * Vosk 的通用中文小模型没见过「西瓜、核桃、西兰花」这些食物词，只能按发音自由猜字，
- * 于是频繁输出同音字（西瓜→吸管、下面→厦门、过期→过其）。
- * 一个一个往修正表里补是治标不治本。
- *
- * ## 做法
- * 用 Vosk 的 grammar 约束解码：把领域相关的词与短语作为合法输出注入解码器，
- * 解码时只能从这些词里选，从根本上消除乱猜同音字。
- * 词表覆盖不了的内容仍由通用解码兜底（见 [VoiceRecognizer] 的降级逻辑）。
- */
+/** 领域词表辅助解码；[unk] 保留未知词出口，并不等同通用自由解码。 */
 object VoiceGrammar {
 
     /** 数量词 */
@@ -81,14 +67,7 @@ object VoiceGrammar {
         "净含量", "规格", "克", "毫升", "千克", "升", "斤", "大", "小", "中", "装",
     )
 
-    /**
-     * 生成 Vosk grammar（JSON 数组字符串）。
-     *
-     * **只放单词**，不放「一箱牛奶」这种整句短语：
-     * 语法模式里每个条目是不可分割的 token，放短语会让解码器失去按词自由组合的能力
-     * （实测反而变差：把「一箱牛奶」听成「鱿鱼 箱 牛奶」）。
-     * 只需要保证领域词（食物/单位/位置/时间）在词表里，让解码器自己把它们串起来。
-     */
+    /** 每轮依据最新常用食品、位置和别名生成语法。 */
     fun build(
         extraLocations: List<String> = emptyList(),
         extraFoods: List<String> = emptyList(),
@@ -106,8 +85,9 @@ object VoiceGrammar {
         words += TIME_WORDS
         words += FUNCTION_WORDS
         words += SPEC_WORDS
+        words += "[unk]"
 
         return words.filter { it.isNotBlank() }
-            .joinToString(prefix = "[", postfix = "]", separator = ",") { "\"$it\"" }
+            .joinToString(prefix = "[", postfix = "]", separator = ",") { word -> "\"" + word.flatMap { c -> when (c) { '"' -> "\\\"".toList(); '\\' -> "\\\\".toList(); else -> if (c.code < 32) " ".toList() else listOf(c) } }.joinToString("") + "\"" }
     }
 }

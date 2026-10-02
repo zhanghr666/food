@@ -188,12 +188,18 @@ class FoodRepository(
 
     suspend fun get(id: Long): FoodItem? = foodDao.findById(id)
 
-    suspend fun add(item: FoodItem): Long = foodDao.insert(item.copy(updatedAt = System.currentTimeMillis()))
+    suspend fun add(item: FoodItem): Long {
+        require(item.quantity.isFinite() && item.quantity >= 0)
+        return foodDao.insert(item.copy(updatedAt = System.currentTimeMillis()))
+    }
 
-    suspend fun addAll(items: List<FoodItem>): List<Long> =
-        foodDao.insertAll(items.map { it.copy(updatedAt = System.currentTimeMillis()) })
+    suspend fun addAll(items: List<FoodItem>): List<Long> {
+        require(items.all { it.quantity.isFinite() && it.quantity >= 0 })
+        return foodDao.insertAll(items.map { it.copy(updatedAt = System.currentTimeMillis()) })
+    }
 
     suspend fun update(item: FoodItem): FoodItem {
+        require(item.quantity.isFinite() && item.quantity >= 0)
         val updated = item.copy(updatedAt = System.currentTimeMillis())
         check(foodDao.update(updated) == 1) { "记录已被删除，无法保存修改" }
         return updated
@@ -201,7 +207,12 @@ class FoodRepository(
 
     suspend fun delete(id: Long) = foodDao.deleteById(id)
 
-    suspend fun setArchived(id: Long, archived: Boolean) = foodDao.setArchived(id, archived)
+    suspend fun setArchived(id: Long, archived: Boolean) { check(foodDao.setArchived(id, archived) == 1) { "记录不存在" } }
+
+    suspend fun setQuantity(id: Long, quantity: Double?) {
+        require(quantity == null || (quantity.isFinite() && quantity >= 0))
+        check(foodDao.updateQuantity(id, quantity ?: 0.0, quantity != null) == 1) { "记录不存在" }
+    }
 
     suspend fun changeQuantity(id: Long, delta: Double) = foodDao.incrementQuantity(id, delta)
 
@@ -216,7 +227,7 @@ class FoodRepository(
 
     private fun statusComparator(warnDays: Int, today: Long): Comparator<FoodItem> =
         compareBy<FoodItem> { item ->
-            // 已过期排最前，其次即将过期，再是无保质期
+            // 已过期排最前，其次即将过期，再是未设置到期日
             when (item.status(today, warnDays)) {
                 FoodStatus.EXPIRED -> 0
                 FoodStatus.EXPIRING_SOON -> 1

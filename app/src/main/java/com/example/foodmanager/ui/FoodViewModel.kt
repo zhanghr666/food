@@ -47,13 +47,18 @@ class FoodViewModel(
     private val _locationFilter = MutableStateFlow("")
     val locationFilter: StateFlow<String> = _locationFilter.asStateFlow()
 
+    val statusFilter = MutableStateFlow<com.example.foodmanager.data.FoodStatus?>(null)
+    fun showStatus(status: com.example.foodmanager.data.FoodStatus?) {
+        _query.value = ""; _locationFilter.value = ""; statusFilter.value = status
+    }
+
     val items: StateFlow<List<FoodItem>> =
-        combine(repository.itemsWithStatus, _query, _locationFilter) { list, q, loc ->
+        combine(repository.itemsWithStatus, _query, _locationFilter, statusFilter, combine(repository.today, repository.settings) { date, config -> date to config.warnDays }) { list, q, loc, status, clock ->
             list.filter { item ->
                 val matchQuery = q.isBlank() || listOf(item.name, item.category, item.location, item.note)
                     .any { it.contains(q, ignoreCase = true) }
                 val matchLocation = loc.isBlank() || item.location == loc
-                matchQuery && matchLocation
+                matchQuery && matchLocation && (status == null || item.status(clock.first, clock.second) == status)
             }
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -173,12 +178,33 @@ class FoodViewModel(
         }
     }
 
-    fun delete(id: Long) {
-        viewModelScope.launch { repository.delete(id); ExpiryReminderWorker.runNow(repository.appContext()) }
+    fun delete(id: Long, onDone: (Result<Unit>) -> Unit = {}) {
+        viewModelScope.launch {
+            val result = try { repository.delete(id); Result.success(Unit) }
+                catch (e: CancellationException) { throw e }
+                catch (e: Exception) { Result.failure(e) }
+            onDone(result)
+            if (result.isSuccess) runCatching { ExpiryReminderWorker.runNow(repository.appContext()) }
+        }
     }
 
-    fun setArchived(id: Long, archived: Boolean) {
-        viewModelScope.launch { repository.setArchived(id, archived); ExpiryReminderWorker.runNow(repository.appContext()) }
+    fun setArchived(id: Long, archived: Boolean, onDone: (Result<Unit>) -> Unit = {}) {
+        viewModelScope.launch {
+            val result = try { repository.setArchived(id, archived); Result.success(Unit) }
+                catch (e: CancellationException) { throw e }
+                catch (e: Exception) { Result.failure(e) }
+            onDone(result)
+            if (result.isSuccess) runCatching { ExpiryReminderWorker.runNow(repository.appContext()) }
+        }
+    }
+
+    fun setQuantity(id: Long, quantity: Double?, onDone: (Result<Unit>) -> Unit) {
+        viewModelScope.launch {
+            val result = try { repository.setQuantity(id, quantity); Result.success(Unit) }
+                catch (e: CancellationException) { throw e }
+                catch (e: Exception) { Result.failure(e) }
+            onDone(result)
+        }
     }
 
     fun changeQuantity(id: Long, delta: Double) {

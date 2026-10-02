@@ -99,15 +99,15 @@ fun ManualInputCard(
 
     // 数量输入框用独立文本状态维护：
     // 若直接绑定数值，初始的 0/1 会占住输入框，用户输入 5 会变成 50/15。
-    var quantityText by remember { mutableStateOf(initialQuantityText(item.quantity)) }
+    var quantityText by remember { mutableStateOf(if (item.quantitySpecified) initialQuantityText(item.quantity) else "") }
     // 编辑对象变化，或父级重置表单时，重新同步
     LaunchedEffect(item.id, resetToken) {
-        quantityText = initialQuantityText(item.quantity)
+        quantityText = if (item.quantitySpecified) initialQuantityText(item.quantity) else ""
     }
-    LaunchedEffect(item.quantity) {
+    LaunchedEffect(item.quantity, item.quantitySpecified) {
         // 识别填充时同步数值，但保留用户正在输入的“0.”等中间文本。
-        if ((quantityText.toDoubleOrNull() ?: 0.0) != item.quantity) {
-            quantityText = initialQuantityText(item.quantity)
+        if ((quantityText.toDoubleOrNull() ?: 0.0) != item.quantity || (quantityText.isBlank() && item.quantitySpecified) || (!quantityText.isBlank() && !item.quantitySpecified)) {
+            quantityText = if (item.quantitySpecified) initialQuantityText(item.quantity) else ""
         }
     }
 
@@ -213,8 +213,9 @@ fun ManualInputCard(
                 onQuantityChange = { raw ->
                     // 只保留数字与小数点，避免带出其它字符
                     val cleaned = raw.filter { it.isDigit() || it == '.' }
+                    if (cleaned.count { it == '.' } > 1 || cleaned.toDoubleOrNull()?.isFinite() == false) return@QuantityUnitRow
                     quantityText = cleaned
-                    onChange(item.copy(quantity = cleaned.toDoubleOrNull() ?: 0.0))
+                    onChange(item.copy(quantity = cleaned.toDoubleOrNull() ?: 0.0, quantitySpecified = cleaned.toDoubleOrNull() != null))
                 },
                 quantityFocusRequester = quantityFocus,
                 unitOptions = Units.ALL,

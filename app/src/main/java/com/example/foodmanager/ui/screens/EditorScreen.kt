@@ -105,19 +105,9 @@ fun EditorScreen(
         }
     }
     fun mergeFromDraft(draft: com.example.foodmanager.core.FoodDraft) {
-        viewModel.update { current ->
-            current.copy(
-                name = draft.name.ifBlank { current.name },
-                category = draft.category.ifBlank { current.category },
-                quantity = if (draft.quantity > 0) draft.quantity else current.quantity,
-                unit = draft.unit.ifBlank { current.unit },
-                location = draft.location.ifBlank { current.location },
-                purchaseDate = draft.purchaseDate,
-                productionDate = draft.productionDate ?: current.productionDate,
-                expiryDate = draft.expiryDate ?: current.expiryDate,
-                note = if (draft.note.isNotBlank()) draft.note else current.note,
-            )
-        }
+        viewModel.mergeRecognition(draft)
+        lastBatchHint = "已补充可识别字段，保留已有记录和手动修改的内容。" +
+            draft.note.takeIf { it.isNotBlank() }?.let { "\n本次识别提示：$it" }.orEmpty()
     }
 
     Scaffold(
@@ -206,6 +196,7 @@ fun EditorScreen(
                 PhotoInputCard(
                     title = "拍照录入",
                     customFoods = customFoods,
+                    foodAliases = foodAliases,
                     // 编辑页没有"日期字段"入口，这里给一个直接选保质期的按钮
                     onPickDate = { datePickerTarget = "expiry" },
                     onRecognized = { _, drafts ->

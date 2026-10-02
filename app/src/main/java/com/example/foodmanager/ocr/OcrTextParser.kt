@@ -5,7 +5,6 @@ import com.example.foodmanager.core.DateUtils
 import com.example.foodmanager.core.FoodDraft
 import com.example.foodmanager.core.FoodField
 import com.example.foodmanager.core.NumberParser
-import com.example.foodmanager.core.ShelfLifeParser
 import com.example.foodmanager.data.Categories
 
 /**
@@ -94,17 +93,6 @@ object OcrTextParser {
         "松子" to "干货", "榛子" to "干货", "板栗" to "干货", "莲子" to "干货", "桂圆" to "干货",
     )
 
-    /** 存放位置关键词 */
-    private val LOCATION_KEYWORDS: List<Pair<List<String>, String>> = listOf(
-        listOf("冷冻", "速冻", "零下", "冰柜", "冷冻室") to "冰箱冷冻",
-        listOf("变温", "软冷冻", "微冻") to "冰箱变温室",
-        listOf("冷藏", "保鲜", "冰箱", "0-4", "0~4", "0～4") to "冰箱冷藏",
-        listOf("酒柜", "恒温酒") to "酒柜",
-        listOf("阴凉干燥", "常温", "室温", "避光", "通风") to "常温储物柜",
-        listOf("阳台") to "阳台",
-        listOf("厨房") to "厨房台面",
-    )
-
     /** 需要忽略的商品信息行（注意：贮存条件里含有关键的存放位置信息，不要过滤） */
     private val NOISE_PATTERNS = listOf(
         Regex(
@@ -165,12 +153,16 @@ object OcrTextParser {
         defaultSource: String = "ocr",
         extraKeywords: List<String> = emptyList(),
         singleItemMode: Boolean = false,
+        foodAliases: Map<String, String> = emptyMap(),
     ): List<FoodDraft> {
         val previous = activeKeywords.get()
-        activeKeywords.set(keywordMap(extraKeywords))
+        activeKeywords.set(keywordMap(extraKeywords + foodAliases.keys))
         return try {
             val records = if (singleItemMode) listOf(text) else splitRecords(text)
-            records.mapNotNull { parseRecord(it, defaultSource) }.filter { it.isUsable }
+            records.mapNotNull { parseRecord(it, defaultSource) }.filter { it.isUsable }.map { draft ->
+                val canonical = foodAliases[draft.name]?.takeIf { it.isNotBlank() }
+                if (canonical == null) draft else draft.copy(name = canonical, category = categoryOf(canonical))
+            }
         } finally {
             activeKeywords.set(previous)
         }
@@ -205,73 +197,18 @@ object OcrTextParser {
         val highlights = mutableListOf<String>()
         var confidence = 0.4f
 
-        // ---------- 存放位置 ----------
-        var location = ""
-        for ((keywords, target) in LOCATION_KEYWORDS) {
-            if (keywords.any { text.contains(it) }) {
-                location = target
-                highlights += FoodField.LOCATION
-                confidence += 0.05f
-                break
-            }
-        }
-
-        // ---------- 日期 ----------
-        var production = findDateAfterKeywords(text, PRODUCTION_KEYWORDS)
-        var expiry = findDateAfterKeywords(text, EXPIRY_KEYWORDS)
-        if (production != null) {
-            highlights += FoodField.PRODUCTION
-            confidence += 0.15f
-        }
-        if (expiry != null) {
-            highlights += FoodField.EXPIRY
-            confidence += 0.15f
-        }
-
-        // 保质期时长（12个月 / 30天）
-        val shelfLife = ShelfLifeParser.parse(text)
-        if (shelfLife != null && production != null && expiry == null) {
-            expiry = DateUtils.plusDays(production, shelfLife.days)
-            highlights += FoodField.EXPIRY
-            confidence += 0.1f
-        }
-
-        // 生产日期 + 到期日 都没找到时，退化为「找所有日期」
-        if (production == null && expiry == null) {
-            val all = findAllDates(text)
-            if (all.size >= 2) {
-                production = all.first()
-                expiry = all.last()
-                highlights += FoodField.PRODUCTION
-                highlights += FoodField.EXPIRY
-                confidence += 0.1f
-            } else if (all.size == 1) {
-                val only = all.first()
-                val keywordIsExpiry = EXPIRY_KEYWORDS.any { text.contains(it) }
-                if (keywordIsExpiry) {
-                    expiry = only
-                    highlights += FoodField.EXPIRY
-                } else {
-                    // 只有一个日期时，跟随年限判断：如果加上常见保质期后在未来，就当作生产日期
-                    production = only
-                    if (shelfLife != null) {
-                        expiry = DateUtils.plusDays(only, shelfLife.days)
-                        highlights += FoodField.EXPIRY
-                    }
-                    highlights += FoodField.PRODUCTION
-                }
-                confidence += 0.05f
-            }
-        }
-
-        // ---------- 数量 + 单位 ----------
-        val (quantity, unit) = findQuantity(text)
-        if (quantity != null) {
-            highlights += FoodField.QUANTITY
-        }
-        if (unit != null) {
-            highlights += FoodField.UNIT
-        }
+        // 包装储存要求进入备注，不能证明用户实际存放在哪里。
+        val location = ""
+        val dates = com.example.foodmanager.core.RecognitionDates.parse(text)
+        val production = dates.production
+        val expiry = dates.expiry
+        if (production != null) highlights += FoodField.PRODUCTION
+        if (expiry != null) highlights += FoodField.EXPIRY
+        val qty = com.example.foodmanager.core.RecognitionQuantity.parse(text)
+        val quantity = qty.amount
+        val unit = qty.unit
+        if (quantity != null) highlights += FoodField.QUANTITY
+        if (unit != null) highlights += FoodField.UNIT
 
         // ---------- 名称 ----------
         val (name, category) = findName(text)
@@ -281,7 +218,7 @@ object OcrTextParser {
         }
         if (category.isNotBlank()) highlights += FoodField.CATEGORY
 
-        val note = buildNote(text, name)
+        val note = (listOf(buildNote(text, name)) + dates.warnings + qty.notes).filter { it.isNotBlank() }.joinToString("；")
 
         if (name.isBlank() && expiry == null && production == null) return null
 
@@ -289,12 +226,17 @@ object OcrTextParser {
             name = name,
             category = category,
             quantity = quantity ?: 1.0,
+            quantitySpecified = quantity != null,
             unit = unit ?: "个",
             productionDate = production,
             expiryDate = expiry,
+            expiryDerivedFromProduction = dates.expiryDerivedFromProduction,
             location = location,
             note = note,
             source = defaultSource,
+            rawText = raw,
+            purchaseDate = dates.purchase ?: DateUtils.today(),
+            purchaseDateSpecified = dates.purchase != null,
             highlights = highlights.distinct(),
             confidence = confidence.coerceIn(0f, 1f),
         )
@@ -450,45 +392,10 @@ object OcrTextParser {
     // 数量 / 单位
     // ------------------------------------------------------------------
 
-    private val UNIT_ALIASES: List<Pair<List<String>, String>> = listOf(
-        listOf("袋", "包") to "袋",
-        listOf("盒", "箱") to "盒",
-        listOf("瓶", "支") to "瓶",
-        listOf("罐", "听") to "罐",
-        listOf("桶") to "桶",
-        listOf("个", "只", "枚", "颗", "粒", "头") to "个",
-        listOf("斤") to "斤",
-        listOf("千克", "公斤", "kg", "KG", "Kg") to "千克",
-        listOf("克", "g", "G", "gram") to "克",
-        listOf("毫升", "ml", "ML", "mL") to "毫升",
-        listOf("升", "L", "l") to "升",
-        listOf("把", "捆", "扎") to "把",
-        listOf("块") to "块",
-        listOf("份") to "份",
-    )
-
     private val QTY_REGEX = Regex(
         "(\\d+(?:\\.\\d+)?|[零〇一二两三四五六七八九十百]+)\\s*" +
             "(袋|包|盒|箱|瓶|支|罐|听|桶|个|只|枚|颗|粒|根|条|头|斤|千克|公斤|kg|KG|克|g|毫升|ml|ML|升|L|把|捆|扎|块|份|片)"
     )
-
-    /** 返回 数量 to 单位（可为 null），兼容「净含量500g」这种没有数量的写法 */
-    private fun findQuantity(text: String): Pair<Double?, String?> {
-        QTY_REGEX.findAll(text).forEach { m ->
-            val numberText = m.groupValues[1]
-            val unitText = m.groupValues[2]
-            val value = NumberParser.parse(numberText) ?: return@forEach
-            // 排除「生产日期」里的数字误匹配（单位不同，基本不会命中）
-            val unit = UNIT_ALIASES.firstOrNull { it.first.any { a -> a.equals(unitText, ignoreCase = true) } }?.second
-                ?: unitText
-            return@findQuantity value to unit
-        }
-        // 只有单位没有数量，例如「瓶装」
-        for ((aliases, unit) in UNIT_ALIASES) {
-            if (aliases.any { text.contains(it) }) return null to unit
-        }
-        return null to null
-    }
 
     // ------------------------------------------------------------------
     // 其他
@@ -535,7 +442,10 @@ object OcrTextParser {
         for (line in rawLines) {
             val info = LineInfo.of(line)
 
-            if (info.isNoise) continue
+            if (info.isNoise) {
+                if (current.isNotBlank()) current += "\n" + line
+                continue
+            }
 
             if (current.isNotBlank() && currentHasName && currentHasDate && info.standaloneProduct) {
                 flush()
@@ -547,7 +457,7 @@ object OcrTextParser {
                 flush()
             }
 
-            current = if (current.isBlank()) line else "$current $line"
+            current = if (current.isBlank()) line else "$current\n$line"
             currentHasDate = currentHasDate || info.hasDate
             currentHasName = currentHasName || info.hasName
         }
