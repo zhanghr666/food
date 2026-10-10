@@ -12,4 +12,10 @@
 /captures
 .externalNativeBuild
 .cxx
+.kotlin/
+
+# Test sources stay local and are excluded from version control.
+**/src/test/
+**/src/androidTest/
+**/src/testFixtures/
 local.properties
