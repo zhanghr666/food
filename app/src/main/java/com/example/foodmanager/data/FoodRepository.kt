@@ -172,6 +172,15 @@ class FoodRepository(
 
     suspend fun removeCommonFood(id: Long) = commonFoodDao.deleteById(id)
 
+    /** 只保存稳定信息；批次日期和数量永不沿用。 */
+    suspend fun rememberFood(item: FoodItem) {
+        val previous = commonFoodDao.findByName(item.name)
+        if (previous == null && commonFoodDao.count() >= MAX_CUSTOM_ITEMS) return
+        commonFoodDao.upsert((previous ?: CommonFood(name = item.name)).copy(
+            category = item.category, unit = item.unit, location = item.location,
+        ))
+    }
+
     suspend fun updateCommonFoodAlias(id: Long, alias: String) =
         commonFoodDao.updateAlias(id, alias.sanitizeAlias())
 
@@ -196,6 +205,11 @@ class FoodRepository(
     suspend fun addAll(items: List<FoodItem>): List<Long> {
         require(items.all { it.quantity.isFinite() && it.quantity >= 0 })
         return foodDao.insertAll(items.map { it.copy(updatedAt = System.currentTimeMillis()) })
+    }
+
+    suspend fun saveDraftBatchOnce(items: List<FoodItem>): List<Long> {
+        require(items.all { it.quantity.isFinite() && it.quantity >= 0 && !it.entryToken.isNullOrBlank() })
+        return foodDao.insertDraftBatchOnce(items.map { it.copy(updatedAt = System.currentTimeMillis()) })
     }
 
     suspend fun update(item: FoodItem): FoodItem {

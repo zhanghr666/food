@@ -24,6 +24,8 @@ object RecognitionQuantity {
                 val u = unit(m.groupValues[2])
                 val prefix = line.substring(0, m.range.first)
                 val tail = line.substring(m.range.last + 1)
+                // 「6个月」中的「6个」属于日期时长，不是库存数量。
+                if (u == "个" && Regex("^\\s*(月|星期)").containsMatchIn(tail)) return@forEach
                 val explicit = Regex("(?:库存|数量|买了|买入|购入|剩余|剩下|一共|总共|合计)[:：是为有]*$").containsMatchIn(prefix)
                 val spec = Regex("净含量|净重|规格|每盒|每瓶|每袋|每包|每份|每箱|每个").containsMatchIn(prefix) ||
                     Regex("每[:：]?$|[×xX*]$").containsMatchIn(prefix) || Regex("^[/／](盒|瓶|袋|包|份|箱)").containsMatchIn(tail)

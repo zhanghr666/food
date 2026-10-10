@@ -66,6 +66,10 @@ data class CommonFood(
     /** 食品名，例如「车厘子」 */
     val name: String,
 
+    val category: String = "",
+    val unit: String = "",
+    val location: String = "",
+
     /** 语音同义词，用 `|` 分隔（例如「樱桃」） */
     @ColumnInfo(defaultValue = "") val alias: String = "",
 

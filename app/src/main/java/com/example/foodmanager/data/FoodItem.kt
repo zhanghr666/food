@@ -9,10 +9,12 @@ import java.util.concurrent.TimeUnit
  * 食物记录。数量统一用 Double 存储，单位单独保存，便于统计与排序。
  * 所有时间字段均为「当地时区当日 0 点」对应的 epoch 毫秒，方便直接做天数差计算。
  */
-@Entity(tableName = "food_items")
+@Entity(tableName = "food_items", indices = [androidx.room.Index(value = ["entryToken"], unique = true)])
 data class FoodItem(
     @PrimaryKey(autoGenerate = true)
     val id: Long = 0L,
+    /** 同一草稿恢复后重试保存，不会再次入库。旧辅助调用可以不提供。 */
+    val entryToken: String? = null,
 
     /** 食物名称，例如：牛奶、鸡蛋、全麦面包 */
     val name: String,
@@ -39,12 +41,20 @@ data class FoodItem(
     /** 保质期截止日期，可为空（未设置到期日则永不提醒） */
     val expiryDate: Long? = null,
 
+    /** expiry = 包装到期日；reminder = 用户计划食用日，不代表食品已过期。 */
+    val dateKind: String = "expiry",
+    val shelfLifeAmount: Int? = null,
+    val shelfLifeUnit: String = "天",
+
     /** 存放位置，如：冰箱冷藏 / 冰箱冷冻 / 常温储物柜 */
     /** 存放位置（不设默认值，留空表示用户尚未指定） */
     val location: String = "",
 
     /** 备注 */
     val note: String = "",
+    val brand: String = "",
+    val specification: String = "",
+    val price: Double? = null,
 
     /** 录入方式：manual / ocr / voice */
     val source: String = "manual",
@@ -107,7 +117,7 @@ object Units {
  */
 object Locations {
     /** 新安装时的默认常用位置（用户可在设置里增删） */
-    val DEFAULTS = listOf("厨房", "冰箱", "客厅储藏室", "储物柜", "茶几")
+    val DEFAULTS = listOf("冰箱冷藏", "冰箱冷冻", "厨房", "储物柜", "茶几")
 
     /** 存放位置不设默认值：新建食物时留空，由用户自己选或填 */
     const val DEFAULT = ""

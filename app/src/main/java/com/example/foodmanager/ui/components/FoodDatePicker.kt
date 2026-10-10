@@ -1,61 +1,77 @@
 package com.example.foodmanager.ui.components
 
-import androidx.compose.material3.DatePicker
-import androidx.compose.material3.DatePickerDialog
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.rememberDatePickerState
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.remember
+import android.os.Build
+import android.view.ContextThemeWrapper
+import android.view.ViewGroup
+import android.widget.NumberPicker
+import androidx.compose.foundation.isSystemInDarkTheme
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import com.example.foodmanager.core.CalendarDate
 import com.example.foodmanager.core.DateUtils
-import java.text.SimpleDateFormat
-import java.util.Date
-import java.util.Locale
-import java.util.TimeZone
 
-/**
- * Material3 日期选择对话框。
- * 编辑页与「录入」页的手工录入卡片共用，保证两处日期选择行为一致。
- */
-@OptIn(ExperimentalMaterial3Api::class)
+/** 三列控件共用于到期、计划食用、入库与生产日期，不要求逐月翻页。 */
 @Composable
-fun FoodDatePickerDialog(
-    initialDate: Long,
-    onDismiss: () -> Unit,
-    onConfirm: (Long) -> Unit,
-) {
-    val initial = remember(initialDate) { toUtcMidnight(initialDate) }
-    val pickerState = rememberDatePickerState(initialSelectedDateMillis = initial)
-    DatePickerDialog(
-        onDismissRequest = onDismiss,
-        confirmButton = {
-            TextButton(onClick = {
-                val millis = pickerState.selectedDateMillis
-                if (millis != null) {
-                    val utc = TimeZone.getTimeZone("UTC")
-                    val text = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA)
-                        .apply { timeZone = utc }
-                        .format(Date(millis))
-                    val parts = text.split('-')
-                    runCatching {
-                        DateUtils.of(parts[0].toInt(), parts[1].toInt(), parts[2].toInt())
-                    }.onSuccess(onConfirm).onFailure { onDismiss() }
-                } else {
-                    onDismiss()
-                }
-            }) { Text("确定") }
-        },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
-    ) {
-        DatePicker(state = pickerState)
+fun FoodDateSelector(selected: CalendarDate, onChange: (CalendarDate) -> Unit) {
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(DateUtils.formatCn(selected.toMillis()), style = MaterialTheme.typography.titleLarge,
+            color = MaterialTheme.colorScheme.primary, modifier = Modifier.testTag("date-preview"))
+        val distance = DateUtils.daysBetween(DateUtils.today(), selected.toMillis())
+        Text(when {
+            distance == 0L -> "今天"
+            distance > 0 -> "距今天 $distance 天"
+            else -> "${-distance} 天前"
+        }, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            DateWheel("年", "date-year", selected.year, minOf(1900, selected.year), maxOf(2100, selected.year), Modifier.weight(1.3f)) { onChange(selected.withYear(it)) }
+            DateWheel("月", "date-month", selected.month, 1, 12, Modifier.weight(1f), wrap = true) { onChange(selected.withMonth(it)) }
+            DateWheel("日", "date-day", selected.day, 1, selected.maximumDay, Modifier.weight(1f), wrap = true) { onChange(selected.withDay(it)) }
+        }
+        Text("滑动年、月、日选择日期", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
-/** 本地日期（当天 0 点） -> UTC 当天 0 点，Material3 DatePicker 要求 UTC 毫秒 */
-private fun toUtcMidnight(localDate: Long): Long {
-    val text = SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).format(Date(localDate))
-    val utc = TimeZone.getTimeZone("UTC")
-    return SimpleDateFormat("yyyy-MM-dd", Locale.CHINA).apply { timeZone = utc }
-        .parse(text)?.time ?: localDate
+@Composable
+private fun DateWheel(label: String, tag: String, value: Int, minimum: Int, maximum: Int, modifier: Modifier, wrap: Boolean = false, onChange: (Int) -> Unit) {
+    val dark = isSystemInDarkTheme()
+    val textColor = MaterialTheme.colorScheme.onSurface.toArgb()
+    Column(modifier, horizontalAlignment = Alignment.CenterHorizontally) {
+        Text(label, style = MaterialTheme.typography.labelLarge)
+        AndroidView(
+            factory = { context -> NumberPicker(ContextThemeWrapper(context, if (dark) android.R.style.Theme_Material else android.R.style.Theme_Material_Light)).apply {
+                descendantFocusability = ViewGroup.FOCUS_BLOCK_DESCENDANTS
+                wrapSelectorWheel = false
+                this.tag = tag
+                setOnLongPressUpdateInterval(100)
+            } },
+            update = { picker ->
+                picker.minValue = minimum
+                picker.maxValue = maximum
+                picker.wrapSelectorWheel = wrap
+                picker.contentDescription = "$label：$value"
+                if (picker.value != value) picker.value = value
+                if (Build.VERSION.SDK_INT >= 29) picker.textColor = textColor
+                picker.setOnValueChangedListener { _, _, next -> onChange(next) }
+            }, modifier = Modifier.fillMaxWidth().height(156.dp).testTag(tag))
+    }
+}
+
+@Composable
+fun FoodDatePickerDialog(initialDate: Long, onDismiss: () -> Unit, onConfirm: (Long) -> Unit, title: String = "选择年月日") {
+    var selected by rememberSaveable(initialDate) { mutableStateOf(CalendarDate.fromMillis(initialDate)) }
+    AlertDialog(onDismissRequest = onDismiss, modifier = Modifier.testTag("food-date-dialog"),
+        title = { Text(title) },
+        text = { Column(Modifier.verticalScroll(rememberScrollState())) { FoodDateSelector(selected) { selected = it } } },
+        confirmButton = { TextButton(onClick = { onConfirm(selected.toMillis()) }, modifier = Modifier.testTag("date-confirm")) { Text("确定") } },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } })
 }

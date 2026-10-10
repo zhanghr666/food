@@ -76,10 +76,12 @@ object VoiceTextParser {
         locationAliases: Map<String, String> = emptyMap(),
         /** 食品别名 → 正式名（例如「樱桃」→「车厘子」） */
         foodAliases: Map<String, String> = emptyMap(),
+        repairVoiceUnits: Boolean = true,
     ): FoodDraft? {
         if (raw.isBlank()) return null
         // 先做同音字校正（西瓜被听成吸管这类问题在这里兜住），用户自定义食品也参与校正
         var text = VoicePhoneticCorrector.correct(raw, customFoods + foodAliases.keys).replace(Regex("(?<=[\\p{IsHan}0-9]) +(?=[\\p{IsHan}0-9])"), "").trim()
+        if (repairVoiceUnits) text = com.example.foodmanager.core.VoiceTimeRepair.correct(text).text
         for (f in FILLER_PATTERNS) text = f.replace(text, "").trim()
         if (text.isBlank()) return null
 
@@ -94,9 +96,15 @@ object VoiceTextParser {
         if (expiry != null) highlights += FoodField.EXPIRY
         if (dates.purchase != null) highlights += FoodField.PURCHASE
 
-        // ---------------- 位置（自定义位置优先，其次内置规则） ----------------
+        // 明确说出的地点不受常用位置表限制；只有完整名称/别名匹配才归一化。
         val locationText = text.replace(Regex("(?:开封后|储存条件|贮存条件|建议保存|建议冷藏)[^，。；;\\n]*"), "")
-        var location: String = matchCustomLocation(locationText, customLocations, locationAliases) ?: ""
+        val matchedLocation = matchCustomLocation(locationText, customLocations, locationAliases)
+        val spokenLocation = matchSpokenLocation(locationText)
+        var location = spokenLocation?.let { spoken ->
+            locationAliases[spoken.place]?.takeIf(String::isNotBlank)
+                ?: customLocations.firstOrNull { it == spoken.place }
+                ?: normalizeSpokenLocation(spoken.place)
+        } ?: matchedLocation.orEmpty()
         if (location.isNotEmpty()) {
             highlights += FoodField.LOCATION
             confidence += 0.1f
@@ -113,13 +121,14 @@ object VoiceTextParser {
 
         // ---------------- 名称（先算名称，数量提取需要避开名称里的字） ----------------
         // 把命中的位置名与别名一并从文本里剔除，避免别名（如"冷藏"）混进食物名称
-        val nameText = dates.matched.fold(text) { value, matched -> value.replace(matched, " ") }
+        val withoutLocation = spokenLocation?.let { text.replace(it.expression, " ") } ?: text
+        val nameText = dates.matched.fold(withoutLocation) { value, matched -> value.replace(matched, " ") }
         val foodMatch = (customFoods.map { it to it } + foodAliases.entries.map { it.key to it.value })
             .filter { it.first.isNotBlank() && it.second.isNotBlank() }
             .sortedByDescending { it.first.length }.firstOrNull { nameText.contains(it.first) }
         val suggestions = VoicePhoneticCorrector.suggestions(text, customFoods + foodAliases.keys)
         val unresolvedName = suggestions.firstOrNull()?.substringAfter("原文“")?.substringBefore("”").orEmpty()
-        val name = foodMatch?.second ?: unresolvedName.ifBlank { extractName(nameText, location, null, customLocations + locationAliases.keys) }
+        val name = foodMatch?.second ?: unresolvedName.ifBlank { extractName(nameText, location, null, customLocations + locationAliases.keys + listOf(location)) }
         if (name.isNotBlank()) {
             highlights += FoodField.NAME
             confidence += 0.2f
@@ -156,7 +165,7 @@ object VoiceTextParser {
         }
 
         // 只有数量/单位、且没有任何日期信息时，不是一条有效记录（例如「三十 盒」）
-        if (name.isBlank() && expiry == null && production == null) return null
+        if (name.isBlank() && location.isBlank() && expiry == null && production == null) return null
 
         return FoodDraft(
             name = name,
@@ -270,13 +279,29 @@ object VoiceTextParser {
         "一周后" to 7,
     )
 
-    /**
-     * 匹配用户自定义位置。支持后缀变体：配置了「茶几」时，
-     * 说「茶几底下」「茶几下面」「茶几上」也能识别到「茶几」。
-     *
-     * 也支持**别名**：给「冰箱」配了别名「冷藏」后，说「放冷藏」会归到「冰箱」。
-     * 返回的是**正式名**（不是别名），这样入库后的位置文字始终统一。
-     */
+    private data class SpokenLocation(val place: String, val expression: String)
+
+    /** 动词/位置标签限定地点，句号、日期等限定结束；不依赖配置词表。 */
+    private fun matchSpokenLocation(text: String): SpokenLocation? {
+        val number = "[0-9零〇一二两三四五六七八九十百]+"
+        val duration = "$number(?:个)?(?:天|月|日|号|年|周|星期|小时)"
+        val ending = "放着|摆着|搁着|存着|[，,。；;！？!?\\n]|今天|明天|后天|(?:还有|有|剩下|剩|再过)?$duration|到期|过期|保质期|生产日期|数量|分类|类别|属于|备注|$"
+        val prefix = "(?:存放在|存放于|储存在|储存于|保存在|放到了|放在|放到|放进|搁在|摆在|置于|收在|收进|(?:存放位置|位置|地点)[:：是为在]+|放|搁|在)(?:了)?\\s*"
+        return Regex("$prefix([\\p{IsHan}A-Za-z0-9 _-]{1,40}?)(?=$ending)")
+            .findAll(text).mapNotNull { match ->
+                val place = match.groupValues[1].trim()
+                val vague = place in setOf("这", "那", "这儿", "那儿", "这里", "那里", "这边", "那边", "unk", "的")
+                val time = Regex("(?:$duration|今天|明天|后天|下周|下个月)(?:后|内|以后|之后)?").matches(place)
+                if (place.isBlank() || vague || time) null else SpokenLocation(place, match.value)
+            }.firstOrNull()
+    }
+
+    private fun normalizeSpokenLocation(place: String): String {
+        val canonicalWords = setOf("冰箱", "冷藏", "保鲜", "冷鲜", "冷冻", "速冻", "冰柜", "冷冻室", "厨房", "台面", "灶台", "料理台", "常温", "室温", "阴凉", "通风", "避光")
+        return if (place in canonicalWords) LOCATION_RULES.firstOrNull { place in it.first }?.second ?: place else place
+    }
+
+    /** 未出现明确地点短语时，用常用位置和别名辅助匹配。 */
     private fun matchCustomLocation(
         text: String,
         customLocations: List<String>,
@@ -315,6 +340,8 @@ object VoiceTextParser {
         /** 用户自定义的位置/食品名与其别名：也要从名称里剔除 */
         customWords: List<String> = emptyList(),
     ): String {
+        // 先取明确的名称槽，量词只作为“数值+单位”移除，不能逐字删掉粉条、千层酥等名称。
+        structuredName(text, customWords)?.let { return it }
         var s = text
         // 先剔除用户自定义词（长词优先，避免"茶几"截断"茶几抽屉"）
         customWords.map { it.trim() }
@@ -357,8 +384,25 @@ object VoiceTextParser {
         OcrTextParser.longestFoodKeyword(s)?.let { return it }
         // 2) 否则取剩下的第一段作为品名（过滤掉纯数量/单位，例如「三十」「盒」）
         val token = s.split(' ').firstOrNull { it.isNotBlank() }?.trim() ?: ""
+        if (Regex("^(?:备注|注意|说明|品牌|规格|净含量|分类|类别|数量|单位)").containsMatchIn(token)) return ""
         if (isQuantityOnly(token) || token.equals("unk", ignoreCase = true)) return ""
         return token.take(16)
+    }
+
+    /** 地点和已识别日期已替换为空格，剩下的首个完整短语可作为词库外名称。 */
+    private fun structuredName(text: String, locationWords: List<String>): String? {
+        var phrase = text.trim().split(Regex("[\\s，,。；;：:]|还有|再过|剩下|数量|分类|类别|备注|保质期|生产日期|还没有吃|还没吃|没有吃|没吃|还没喝完|没喝完|吃了一半|没开封|开封了|快没了"), limit = 2).first()
+        phrase = phrase.replace(Regex("^(?:家里|家中|我家)?(?:有|买了|买的|买入|购入|剩下的|昨天的|昨晚的|今天剩的)"), "")
+        val count = "(?:[0-9]+(?:\\.[0-9]+)?|[零〇一二两三四五六七八九十百半]+)"
+        val units = UNIT_RULES.flatMap { it.first }.distinct().sortedByDescending(String::length).joinToString("|") { Regex.escape(it) }
+        phrase = phrase.replace(Regex("^$count(?:$units)(?:的)?"), "")
+            .replace(Regex("$count(?:$units)(?:人)?$"), "")
+        if (phrase.length !in 2..16 || !Regex("[\\p{IsHan}A-Za-z]+(?:[\\p{IsHan}A-Za-z0-9]*)").matches(phrase)) return null
+        if (isQuantityOnly(phrase) || phrase.equals("unk", ignoreCase = true)) return null
+        if (Regex("^(?:放|存放|储存|保存在|位置|地点|今天|明天|后天|生产|到期|过期|有效期|数量|单位|品牌|规格|净含量|备注|注意|说明|没开封|开封|没吃|没有|还没)").containsMatchIn(phrase)) return null
+        // 没有明确“放在…”的旧式句仍交给位置/状态兜底，不能把方位拼进名称。
+        if ((LOCATION_RULES.flatMap { it.first } + locationWords.filter { it.length >= 2 }).any { phrase.contains(it) } || phrase.contains(Regex("放|还有|过期|到期|保质期"))) return null
+        return phrase
     }
 
     /** 只由数字、数词、量词组成（"三十"、"盒"、"两箱"），不能当作食物名称 */

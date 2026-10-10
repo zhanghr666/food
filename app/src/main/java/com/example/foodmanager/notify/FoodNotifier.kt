@@ -23,6 +23,8 @@ object FoodNotifier {
 
     const val CHANNEL_EXPIRING = "food_expiring_soon"
     const val CHANNEL_EXPIRED = "food_expired"
+    const val CHANNEL_PLAN = "food_eating_plan"
+    const val NOTIFICATION_ID_PLAN = 1003
 
     const val NOTIFICATION_ID_EXPIRING = 1001
     const val NOTIFICATION_ID_EXPIRED = 1002
@@ -32,6 +34,7 @@ object FoodNotifier {
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.createNotificationChannel(NotificationChannel(CHANNEL_PLAN, "食用计划", NotificationManager.IMPORTANCE_DEFAULT).apply { description = "自己设置的食用计划，不代表食品过期" })
 
         manager.createNotificationChannel(
             NotificationChannel(
@@ -61,16 +64,21 @@ object FoodNotifier {
         ensureChannels(context)
 
         val today = DateUtils.today()
-        val expired = items.filter { (it.daysToExpiry(today) ?: Long.MAX_VALUE) < 0 }
+        val expired = items.filter { it.dateKind == "expiry" && (it.daysToExpiry(today) ?: Long.MAX_VALUE) < 0 }
         val expiring = items.filter {
             val d = it.daysToExpiry(today) ?: return@filter false
-            d in 0..warnDays.toLong()
+            it.dateKind == "expiry" && d in 0..warnDays.toLong()
         }
+        val plans = items.filter { it.dateKind == "reminder" && (it.daysToExpiry(today) ?: Long.MAX_VALUE) <= 0 }
 
         var sent = 0
         val manager = NotificationManagerCompat.from(context)
         if (expired.isEmpty()) manager.cancel(NOTIFICATION_ID_EXPIRED)
         if (expiring.isEmpty()) manager.cancel(NOTIFICATION_ID_EXPIRING)
+        if (plans.isEmpty()) manager.cancel(NOTIFICATION_ID_PLAN)
+        if (plans.isNotEmpty()) sent += post(context, CHANNEL_PLAN, NOTIFICATION_ID_PLAN,
+            "${plans.size} 件食物到了计划食用日", plans.take(3).joinToString("、") { it.name },
+            plans.joinToString("\n") { "· ${it.name}，计划食用日 ${DateUtils.format(it.expiryDate)}" }, 0xFF2E6B4F.toInt())
         if (expired.isNotEmpty()) {
             sent += post(
                 context = context,
@@ -100,6 +108,7 @@ object FoodNotifier {
         val manager = NotificationManagerCompat.from(context)
         manager.cancel(NOTIFICATION_ID_EXPIRING)
         manager.cancel(NOTIFICATION_ID_EXPIRED)
+        manager.cancel(NOTIFICATION_ID_PLAN)
     }
 
     private fun unitText(item: FoodItem): String =

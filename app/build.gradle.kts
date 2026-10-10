@@ -18,8 +18,8 @@ android {
         applicationId = "com.example.foodmanager"
         minSdk = 24
         targetSdk = 37
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "2.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables {
@@ -65,6 +65,7 @@ android {
     androidResources {
         // 离线语音模型不能压缩（Vosk 直接按文件路径读取）
         noCompress += "model-cn"
+        noCompress += "tflite"
     }
 }
 
@@ -96,6 +97,7 @@ dependencies {
 
     // 离线 OCR（中英文文字识别，模型随 APK 打包，无需联网）
     implementation(libs.mlkit.text.recognition.chinese)
+    implementation(libs.mediapipe.tasks.vision)
 
     // 离线语音识别（Vosk，中文模型随 APK 打包，完全本机运行）
     implementation(libs.vosk.android)

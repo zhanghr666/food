@@ -8,7 +8,6 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
-import com.example.foodmanager.data.AppDatabase
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
@@ -97,22 +96,6 @@ class VoiceRecognizer(private val context: Context) {
     @Volatile
     private var lastPartialEmitted: String = ""
 
-    /** 领域语法词表（JSON 数组，空表示用自由解码） */
-    @Volatile
-    private var grammarJson: String? = null
-
-    /**
-     * 生成 [grammarJson] 时所用的词表指纹。
-     *
-     * 用户在设置里增删位置/食品、或改了别名后，指纹变化 → 下次识别前**重建词表**，
-     * 否则新加的常用食品要等重启 App 才生效。
-     */
-    @Volatile
-    private var grammarSignature: String? = null
-
-    @Volatile
-    private var grammarWordCount: Int = 0
-
     private val _state = MutableSharedFlow<VoiceState>(
         replay = 0,
         extraBufferCapacity = 16,
@@ -152,7 +135,6 @@ class VoiceRecognizer(private val context: Context) {
                         _state.tryEmit(VoiceState.Error("离线语音模型加载失败，请重装应用或改用文字录入"))
                         return@withLock
                     }
-                    refreshGrammar()
                     if (generation != sessionId || !holdActive) return@withLock
                     transcript = VoiceTranscript()
                     startListening(loaded)
@@ -176,12 +158,10 @@ class VoiceRecognizer(private val context: Context) {
             return
         }
         val rec = Recognizer(loaded, SAMPLE_RATE)
-        // 每轮使用最新词表。词表只辅助解码，不能保证同音词一定正确。
-        if (grammarJson != null) {
-            runCatching { rec.setGrammar(grammarJson) }
-                .onSuccess { Log.i(TAG, "已启用领域语法约束（${grammarWordCount} 个词条）") }
-                .onFailure { Log.w(TAG, "语法设置失败，改用自由解码：${it.message}") }
-        }
+        rec.setMaxAlternatives(3)
+        // 使用内置模型的默认解码图，不把听写限制在食品、位置或用户常用词中。
+        // 食品词典仅用于听写后的字段解析；多条转写仍交给统一候选核对。
+        Log.i(TAG, "使用通用离线听写（无应用限制词表）")
         recognizer = rec
 
         // 自己开麦克风：大缓冲区避免丢样本
@@ -246,7 +226,8 @@ class VoiceRecognizer(private val context: Context) {
                         continue
                     }
                     val text = if (rec.acceptWaveForm(buffer, read)) {
-                        currentTranscript.acceptCompleted(extractText(rec.result, "text"))
+                        val results = extractResults(rec.result)
+                        currentTranscript.acceptCompleted(results.firstOrNull().orEmpty(), results.drop(1))
                     } else currentTranscript.acceptPartial(extractText(rec.partialResult, "partial"))
                     lastText = text
                     if (text.isNotBlank() && text != lastPartialEmitted && generation == sessionId) {
@@ -278,10 +259,11 @@ class VoiceRecognizer(private val context: Context) {
                     val rec = recognizer
                     captureJob?.join()
                     runCatching { audioRecord?.stop() }
-                    val text = if (rec == null) "" else transcript.finish(extractText(rec.finalResult, "text"))
+                    val results = rec?.let { extractResults(it.finalResult) }.orEmpty()
+                    val text = if (rec == null) "" else transcript.finish(results.firstOrNull().orEmpty(), results.drop(1))
                     if (generation != sessionId) return@withLock
                     lastText = text
-                    outcome = if (text.isNotBlank()) VoiceState.Result(text)
+                    outcome = if (text.isNotBlank()) VoiceState.Result(text, transcript.alternatives())
                     else VoiceState.Error("没有听清，请等到正在聆听后再说话")
                 } catch (t: Exception) {
                     outcome = VoiceState.Error("语音处理失败，请重试")
@@ -332,52 +314,12 @@ class VoiceRecognizer(private val context: Context) {
 
     // ------------------------------------------------------------------
 
-    /** 读取用户设置（自定义位置 / 常用食品），用于生成语法词表 */
-    private fun readSettings(): com.example.foodmanager.data.AppSettings = runCatching {
-        val database = AppDatabase.get(context)
-        kotlinx.coroutines.runBlocking { database.settingsDao().get() }
-    }.getOrNull() ?: com.example.foodmanager.data.AppSettings.DEFAULT
-
-    /**
-     * 读取参与语音词表的位置与食品（**含别名**）。
-     *
-     * 别名也要进词表，否则用户说「冷藏」时 Vosk 根本不会把它识别出来，
-     * 后面的"别名→正式名"映射也就无从生效。
-     */
-    private fun readGrammarWords(): GrammarWords = runCatching {
-        val database = AppDatabase.get(context)
-        kotlinx.coroutines.runBlocking {
-            val locations = database.storageLocationDao().getAll()
-            val foods = database.commonFoodDao().getAll()
-            GrammarWords(
-                locations = locations.flatMap { listOf(it.name) + it.aliasList },
-                foods = foods.flatMap { listOf(it.name) + it.aliasList },
-            )
-        }
-    }.getOrElse { GrammarWords(emptyList(), emptyList()) }
-
-    private fun refreshGrammar() {
-            // 生成语法词表：把用户维护的常用位置/食品（含别名）纳入
-            // 指纹变化时重建 —— 这样在设置里改了别名，下一次说话就生效，不必重启
-            val wordSource = readGrammarWords()
-            val signature = wordSource.locations.joinToString("|") +
-                "#" + wordSource.foods.joinToString("|")
-            if (grammarJson == null || grammarSignature != signature) {
-                runCatching {
-                    VoiceGrammar.build(wordSource.locations, wordSource.foods)
-                }
-                    .onSuccess {
-                        grammarJson = it
-                        grammarSignature = signature
-                        grammarWordCount = it.count { c -> c == ',' } + 1
-                        Log.i(TAG, "领域语法词表生成完成，共 $grammarWordCount 个词条")
-                    }
-                    .onFailure { Log.w(TAG, "语法词表生成失败，将使用自由解码", it) }
-            }
-
-    }
-
-    private data class GrammarWords(val locations: List<String>, val foods: List<String>)
+    internal fun extractResults(json: String?): List<String> = runCatching {
+        val obj = JSONObject(json.orEmpty())
+        val alternatives = obj.optJSONArray("alternatives")
+        if (alternatives == null) listOf(obj.optString("text")) else
+            (0 until alternatives.length()).map { alternatives.optJSONObject(it)?.optString("text").orEmpty() }
+    }.getOrDefault(emptyList()).map(String::trim).filter(String::isNotBlank).distinct()
 
     private fun extractText(json: String?, key: String): String {
         if (json.isNullOrBlank()) return ""

@@ -99,9 +99,10 @@ class ExpiryReminderWorker(
             val settings = repo.loadSettings()
             val alerts = repo.loadAlertItems(settings.warnDays)
             val today = DateUtils.today()
-            val expired = alerts.count { (it.daysToExpiry(today) ?: Long.MAX_VALUE) < 0 }
-            val soon = alerts.size - expired
-            return "已过期 $expired 件，即将过期 $soon 件"
+            val expired = alerts.count { it.dateKind == "expiry" && (it.daysToExpiry(today) ?: Long.MAX_VALUE) < 0 }
+            val soon = alerts.count { it.dateKind == "expiry" && (it.daysToExpiry(today) ?: Long.MAX_VALUE) in 0..settings.warnDays.toLong() }
+            val plans = alerts.count { it.dateKind == "reminder" && (it.daysToExpiry(today) ?: Long.MAX_VALUE) <= 0 }
+            return "已过期 $expired 件，即将过期 $soon 件，食用计划 $plans 件"
         }
     }
 }

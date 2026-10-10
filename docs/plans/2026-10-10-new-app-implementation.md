@@ -25,3 +25,9 @@
 - 官方 EfficientDet Lite0 int8 模型已下载至 app/src/main/assets/vision/food-detector.tflite，大小 4,602,795 字节。SHA-256：0720bf247bd76e6594ea28fa9c6f7c5242be774818997dbbeffc4da460c723bb。
 - 模型来源：https://storage.googleapis.com/mediapipe-models/object_detector/efficientdet_lite0/int8/1/efficientdet_lite0.tflite 。模型尚未接入业务流程；接入时核对分发许可与支持标签，并进行离线推理验证。
 - 当前仅完成方案、实施计划及模型准备，尚未改动应用业务代码。上述测试验证现有基线，不代表新版识别准确率已达标。
+
+## 执行更新（2026-10-10）
+
+任务 1 至 5 的应用代码已实现。新增 PantryApp、InventoryViewModel 与统一 EntryViewModel；旧的录入卡片和首页页面已移除。按用户补充要求，六项核心字段保存时检查完整性，可选信息仍可展开填写、默认入库日期为今天。
+
+后续按用户要求恢复原 applicationId 与应用名称，补充按住说话和候选就地纠错，自动测试扩展至 120 项并通过，已完成 Debug 构建与 lint（0 错误）。小米 Android 16 上七项交互测试通过，覆盖录音手势、实际麦克风状态、名称候选及保存错误。页面截图已检查；模型及原生库随 APK 打包，清单没有网络权限。任务 3 的真实照片推理与任务 6 的实际语音 / 照片准确率验收仍需真实样本测量，不得将代码完成与文本解析通过表述为真实识别效果已经达标。

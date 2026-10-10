@@ -59,6 +59,7 @@ object VoicePhoneticCorrector {
         add("pian", '片', '偏', '骗')
         add("bing", '饼', '冰', '病', '并', '兵')
         add("gan", '干', '甘', '肝', '敢', '感')
+        add("zhe", '蔗', '哲', '遮', '折')
         add("qiao", '巧', '桥', '敲', '悄')
         add("ke", '克', '可', '客', '课', '刻')
         add("li", '力', '李', '里', '离', '梨', '礼')
@@ -167,16 +168,40 @@ object VoicePhoneticCorrector {
     }
 
     /** 歧义词只提示候选，用户确认前不把原文改成食品名。 */
-    fun suggestions(text: String, extraFoods: List<String> = emptyList()): List<String> {
+    data class NameSuggestion(val heard: String, val candidate: String, val suggestedQuantity: Double? = null, val suggestedUnit: String? = null)
+
+    fun suggestions(text: String, extraFoods: List<String> = emptyList()): List<String> =
+        nameSuggestions(text, extraFoods).map { "名称待确认：原文“${it.heard}”，可能是“${it.candidate}”" }
+
+    fun nameSuggestions(text: String, extraFoods: List<String> = emptyList()): List<NameSuggestion> {
         val lexicon = com.example.foodmanager.ocr.OcrTextParser.foodKeywordNames(extraFoods)
-        val slot = Regex("(?:[0-9零〇一二两三四五六七八九十百]+\\s*(?:个|只|颗|瓶|盒|袋)\\s*(?:的\\s*)?)([\\p{IsHan}]{2,5}?)(?=\\s|在|放|还有|$)")
-        return slot.findAll(text).mapNotNull { m ->
-            val word = m.groupValues[1]
+        val compact = text.replace(Regex("(?<=[\\p{IsHan}0-9]) +(?=[\\p{IsHan}0-9])"), "")
+        val count = "[0-9零〇一二两三四五六七八九十百]+"
+        val unit = "个|只|颗|瓶|盒|袋|根|条|份|把|包|箱|块|斤"
+        val ending = "在|放|还有|[\\s，,。；;]|$"
+        val slot = Regex("($count)($unit)(月)?(?:人)?(?:的)?([\\p{IsHan}]{2,5}?)(?=$ending)")
+        val leading = slot.findAll(compact).mapNotNull { m ->
+            val word = m.groupValues[4]
+            val damagedQuantity = m.groupValues[3].isNotBlank()
+            val prefix = compact.substring(0, m.range.first).substringAfterLast('，').substringAfterLast(',')
+            // 真正的时长描述不推成库存数量；多出的“月”只在数量开头、同音食品槽里给候选。
+            val quantityContext = Regex("^(?:家里|家中)?(?:有|买了|买的|买入|购入|库存[:：是为有]*|数量[:：是为有]*)?$").matches(prefix)
+            if (damagedQuantity && (m.groupValues[2] != "个" || !quantityContext)) return@mapNotNull null
             if (word in extraFoods || word in lexicon) null else {
                 val candidate = if (word in listOf("吸管", "习惯", "稀管", "席管")) "西瓜" else matchFood(word, lexicon)
-                candidate?.let { "名称待确认：原文“$word”，可能是“$it”" }
+                candidate?.let { NameSuggestion(word, it,
+                    suggestedQuantity = if (damagedQuantity) com.example.foodmanager.core.NumberParser.parse(m.groupValues[1]) else null,
+                    suggestedUnit = if (damagedQuantity) "个" else null) }
             }
-        }.distinct().toList()
+        }.toList()
+        // 名称在前、数量在后与无数量的地点句也使用相同的唯一同音候选逻辑。
+        val trailing = Regex("(?:^|[，,。；;])(?:家里|家中)?(?:有|买了|买的|记录)?([\\p{IsHan}]{2,12}?)($count)($unit)(?:人)?(?=$ending)")
+        val beforePlace = Regex("(?:^|[，,。；;])(?:家里|家中)?(?:有|买了|买的|记录)?([\\p{IsHan}]{2,12}?)(?=放在|放到|在)")
+        val additional = (trailing.findAll(compact) + beforePlace.findAll(compact)).mapNotNull { m ->
+            val word = m.groupValues[1]
+            if (word in lexicon || word in extraFoods) null else matchFood(word, lexicon)?.let { NameSuggestion(word, it) }
+        }.toList()
+        return (leading + additional).distinct()
     }
 
     /** 纯比对逻辑：token 听起来是不是某个食物词（不做任何替换） */

@@ -12,7 +12,7 @@ import androidx.room.RoomDatabase
         StorageLocation::class,
         CommonFood::class,
     ],
-    version = 9,
+    version = 1,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -23,7 +23,7 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun commonFoodDao(): CommonFoodDao
 
     companion object {
-        private const val DB_NAME = "food_manager.db"
+        private const val DB_NAME = "food_manager_next.db"
 
         @Volatile
         private var instance: AppDatabase? = null
@@ -35,9 +35,6 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     DB_NAME,
                 )
-                    // 正式迁移：升级不丢数据
-                    // （原来用 fallbackToDestructiveMigration，每次改表结构都会清空用户数据）
-                    .addMigrations(*DatabaseMigrations.ALL)
                     .build()
                     .also { instance = it }
             }

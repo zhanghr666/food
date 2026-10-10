@@ -66,6 +66,9 @@ interface FoodDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(items: List<FoodItem>): List<Long>
 
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertDraftBatchOnce(items: List<FoodItem>): List<Long>
+
     @Update
     suspend fun update(item: FoodItem): Int
 
@@ -188,6 +191,12 @@ interface StorageLocationDao {
 /** 常用食品（独立表）的读写 */
 @Dao
 interface CommonFoodDao {
+
+    @Query("SELECT * FROM common_foods WHERE name = :name LIMIT 1")
+    suspend fun findByName(name: String): CommonFood?
+
+    @Upsert
+    suspend fun upsert(item: CommonFood)
 
     @Query("SELECT * FROM common_foods ORDER BY sortOrder ASC, id ASC")
     fun observeAll(): Flow<List<CommonFood>>

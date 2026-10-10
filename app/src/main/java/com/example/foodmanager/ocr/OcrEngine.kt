@@ -23,11 +23,24 @@ data class OcrResult(
     val lines: List<String> = emptyList(),
 )
 
+data class OcrLine(val text: String, val left: Int, val top: Int, val right: Int, val bottom: Int)
+
 /**
  * 基于 Google ML Kit 的离线文字识别（中文 + 英文）。
  * 识别模型内置在 APK 中，完全离线运行，不上传任何图片。
  */
 class OcrEngine {
+
+    /** 保留文字位置，避免将包装不同区域的标签和日期随意拼接。 */
+    suspend fun recognizeLines(bitmap: Bitmap): List<OcrLine> = suspendCancellableCoroutine { cont ->
+        recognizer.process(InputImage.fromBitmap(bitmap, 0))
+            .addOnSuccessListener { result ->
+                if (cont.isActive) cont.resume(result.textBlocks.flatMap { it.lines }.mapNotNull { line ->
+                    line.boundingBox?.let { box -> OcrLine(line.text, box.left, box.top, box.right, box.bottom) }
+                })
+            }
+            .addOnFailureListener { if (cont.isActive) cont.resumeWithException(it) }
+    }
 
     private val recognizer by lazy {
         TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
@@ -220,9 +233,14 @@ class OcrEngine {
             val raw = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
                 // ImageDecoder 会自动应用 EXIF 方向
                 val source = ImageDecoder.createSource(context.contentResolver, uri)
-                ImageDecoder.decodeBitmap(source) { decoder, _, _ ->
+                ImageDecoder.decodeBitmap(source) { decoder, info, _ ->
                     decoder.allocator = ImageDecoder.ALLOCATOR_SOFTWARE
                     decoder.isMutableRequired = false
+                    val maxSide = maxOf(info.size.width, info.size.height)
+                    if (maxSide > MAX_DIMENSION) {
+                        val scale = MAX_DIMENSION.toFloat() / maxSide
+                        decoder.setTargetSize((info.size.width * scale).toInt().coerceAtLeast(1), (info.size.height * scale).toInt().coerceAtLeast(1))
+                    }
                 }
             } else {
                 @Suppress("DEPRECATION")

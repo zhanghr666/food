@@ -7,15 +7,18 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.dynamicDarkColorScheme
 import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.Shapes
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.unit.dp
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 
 private val DarkColorScheme = darkColorScheme(
-    primary = BrandOrangeLight,
-    onPrimary = Color(0xFF4A1B00),
-    primaryContainer = BrandContainerDark,
-    onPrimaryContainer = Color(0xFFFFDCC4),
+    primary = FreshGreenLight,
+    onPrimary = Color(0xFF003824),
+    primaryContainer = FreshContainerDark,
+    onPrimaryContainer = FreshContainerLight,
     secondary = FreshGreenLight,
     onSecondary = Color(0xFF003824),
     secondaryContainer = FreshContainerDark,
@@ -26,8 +29,10 @@ private val DarkColorScheme = darkColorScheme(
     onBackground = OnSurfaceDark,
     surface = SurfaceDark,
     onSurface = OnSurfaceDark,
-    surfaceVariant = Color(0xFF2C211C),
-    onSurfaceVariant = Color(0xFFD8C2B8),
+    surfaceVariant = Color(0xFF28342D),
+    onSurfaceVariant = Color(0xFFBCC8C0),
+    outline = Color(0xFF83948A),
+    outlineVariant = Color(0xFF3F5046),
     error = DangerRedLight,
     onError = Color(0xFF690005),
     errorContainer = DangerContainerDark,
@@ -35,22 +40,24 @@ private val DarkColorScheme = darkColorScheme(
 )
 
 private val LightColorScheme = lightColorScheme(
-    primary = BrandOrange,
+    primary = FreshGreen,
     onPrimary = Color.White,
-    primaryContainer = BrandContainerLight,
-    onPrimaryContainer = Color(0xFF3A1100),
+    primaryContainer = Color(0xFFDDECE1),
+    onPrimaryContainer = Color(0xFF123B28),
     secondary = FreshGreen,
     onSecondary = Color.White,
     secondaryContainer = FreshContainerLight,
     onSecondaryContainer = Color(0xFF00200F),
-    tertiary = Color(0xFF705000),
+    tertiary = Color(0xFFA65C00),
     onTertiary = Color.White,
-    background = SurfaceLight,
+    background = Color(0xFFF5F6F3),
     onBackground = OnSurfaceLight,
-    surface = Color(0xFFFFFBFF),
+    surface = Color(0xFFFEFFFB),
     onSurface = OnSurfaceLight,
-    surfaceVariant = Color(0xFFF5EAE4),
-    onSurfaceVariant = Color(0xFF53433C),
+    surfaceVariant = Color(0xFFEBEEEA),
+    onSurfaceVariant = Color(0xFF68736C),
+    outline = Color(0xFF8A968E),
+    outlineVariant = Color(0xFFDFE5DF),
     error = DangerRed,
     onError = Color.White,
     errorContainer = DangerContainerLight,
@@ -77,6 +84,8 @@ fun FoodManagerTheme(
     MaterialTheme(
         colorScheme = colorScheme,
         typography = Typography,
+        shapes = Shapes(small = RoundedCornerShape(8.dp), medium = RoundedCornerShape(12.dp),
+            large = RoundedCornerShape(16.dp), extraLarge = RoundedCornerShape(20.dp)),
         content = content,
     )
 }

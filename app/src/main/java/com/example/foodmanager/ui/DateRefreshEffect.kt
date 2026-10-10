@@ -15,15 +15,21 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 /** 前台按分钟及系统日期事件更新，恢复前台立即刷新；无需后台轮询。 */
 @Composable
 fun DateRefreshEffect(viewModel: FoodViewModel) {
+    DateRefreshEffect { viewModel.refreshToday() }
+}
+
+@Composable
+fun DateRefreshEffect(onRefresh: () -> Unit) {
     val context = LocalContext.current
     val lifecycle = LocalLifecycleOwner.current.lifecycle
-    DisposableEffect(context, lifecycle, viewModel) {
+    val refresh = androidx.compose.runtime.rememberUpdatedState(onRefresh)
+    DisposableEffect(context, lifecycle) {
         val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context?, intent: Intent?) = viewModel.refreshToday()
+            override fun onReceive(context: Context?, intent: Intent?) = refresh.value()
         }
         var registered = false
         fun register() {
-            viewModel.refreshToday()
+            refresh.value()
             if (registered) return
             ContextCompat.registerReceiver(context, receiver, IntentFilter().apply {
                 addAction(Intent.ACTION_TIME_TICK)

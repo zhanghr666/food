@@ -30,7 +30,7 @@ fun NotificationPermissionCard() {
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled()) return "系统通知未授权或已关闭，无法在通知栏提醒"
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             val manager = context.getSystemService(NotificationManager::class.java)
-            val blocked = listOf(FoodNotifier.CHANNEL_EXPIRING, FoodNotifier.CHANNEL_EXPIRED).filter {
+            val blocked = listOf(FoodNotifier.CHANNEL_EXPIRING, FoodNotifier.CHANNEL_EXPIRED, FoodNotifier.CHANNEL_PLAN).filter {
                 manager?.getNotificationChannel(it)?.importance == NotificationManager.IMPORTANCE_NONE
             }
             if (blocked.isNotEmpty()) return "部分提醒渠道已关闭，请到系统通知设置中开启"

@@ -8,6 +8,7 @@ object RecognitionDates {
         val purchase: Long?, val production: Long?, val expiry: Long?,
         val matched: List<String>, val warnings: List<String>,
         val expiryDerivedFromProduction: Boolean = false,
+        val expirySuggested: Boolean = false,
     )
 
     private const val N = "[0-9零〇一二两三四五六七八九十百]+"
@@ -16,21 +17,22 @@ object RecognitionDates {
             "(?<![0-9])[12][0-9]{7}(?![0-9])|" +
             "(?:(?:[0-9零〇一二三四五六七八九]{4})年)?${N}月${N}[日号]|" +
             "大前天|前天|昨天|大后天|后天|明天|今天|今日|明儿|今儿|" +
-            "(?:还有|再过)?${N}(?:个?星期|周|个月|天)(?:之后|以后|后)?",
+            "(?:还有|再过)?${N}(?:个?星期|周|个月|天|年)(?:之后|以后|后)?",
     )
     private val role = Regex("购买日期|买入时间|买入日期|购买|购入|买入|买的|买了|生产日期|制造日期|生产|制造|保质期至|有效期至|到期日期|到期日|到期|过期|有效期|EXP|MFG", RegexOption.IGNORE_CASE)
-    private val connectors = Regex("^[\\s:：的是在于为至]*$")
+    private val connectors = Regex("^[\\s:：的是在于为至]*(?:就|会|将)?\\s*$")
     private fun kind(label: String): Int = when {
         label.contains("买") || label.contains("购") -> 0
         label.contains("生产") || label.contains("制造") || label.equals("MFG", true) -> 1
         else -> 2
     }
 
-    fun parse(raw: String, voice: Boolean = false): Result {
-        val text = raw.replace(Regex("(?<=[\\p{IsHan}0-9]) +(?=[\\p{IsHan}0-9])"), "")
+    fun parse(raw: String, voice: Boolean = false, repairVoiceUnits: Boolean = false): Result {
+        val repair = if (voice && repairVoiceUnits) VoiceTimeRepair.correct(raw) else null
+        val text = (repair?.text ?: raw).replace(Regex("(?<=[\\p{IsHan}0-9]) +(?=[\\p{IsHan}0-9])"), "")
         val tokens = date.findAll(text).toList()
         val values = Array(3) { mutableListOf<Long>() }
-        val warnings = mutableListOf<String>()
+        val warnings = repair?.warnings.orEmpty().toMutableList()
         val invalid = mutableSetOf<Int>()
         tokens.forEachIndexed { index, token ->
             val left = text.substring(if (index == 0) 0 else tokens[index - 1].range.last + 1, token.range.first)
@@ -71,7 +73,8 @@ object RecognitionDates {
             warnings += "到期日期早于生产日期，请核对原文"
             expiry = null
         }
-        return Result(purchase, production, expiry, tokens.map { it.value }, warnings.distinct(), derived && expiry != null)
+        return Result(purchase, production, expiry, tokens.map { it.value }, warnings.distinct(), derived && expiry != null,
+            expiry != null && repair?.warnings?.isNotEmpty() == true)
     }
 
     private fun resolve(text: String, voice: Boolean): Long? {
@@ -92,9 +95,10 @@ object RecognitionDates {
         if (!voice) return null
         val offsets = mapOf("大前天" to -3, "前天" to -2, "昨天" to -1, "今天" to 0, "今日" to 0, "今儿" to 0, "明天" to 1, "明儿" to 1, "后天" to 2, "大后天" to 3)
         offsets[text]?.let { return DateUtils.todayPlus(it) }
-        Regex("(?:还有|再过)?($N)(个?星期|周|个月|天)(?:之后|以后|后)?").matchEntire(text)?.let {
+        Regex("(?:还有|再过)?($N)(个?星期|周|个月|天|年)(?:之后|以后|后)?").matchEntire(text)?.let {
             val amount = NumberParser.parse(it.groupValues[1])?.toInt() ?: return null
             if (amount !in 0..36500) return null
+            if (it.groupValues[2] == "年" && amount > 100) return null
             return add(DateUtils.today(), amount, it.groupValues[2])
         }
         return null
