@@ -19,6 +19,9 @@ class FoodApp : Application() {
 
     val database: AppDatabase by lazy { AppDatabase.get(this) }
 
+    val voice by lazy { com.example.foodmanager.voice.VoiceRecognizer(this) }
+    val items by lazy { com.example.foodmanager.data.ItemRepository(this, database) }
+
     val repository: FoodRepository by lazy {
         FoodRepository(
             foodDao = database.foodDao(),
@@ -36,6 +39,7 @@ class FoodApp : Application() {
         FoodNotifier.ensureChannels(this)
 
         appScope.launch {
+            runCatching { com.example.foodmanager.core.CameraFiles.cleanUpStale(this@FoodApp); items.cleanup() }
             val settings = repository.loadSettings()
             if (settings.notifyEnabled) {
                 ExpiryReminderWorker.schedule(this@FoodApp, settings.notifyHour)

@@ -15,6 +15,8 @@ import com.example.foodmanager.MainActivity
 import com.example.foodmanager.R
 import com.example.foodmanager.core.DateUtils
 import com.example.foodmanager.data.FoodItem
+import com.example.foodmanager.data.ManagedItem
+import com.example.foodmanager.data.ItemReminder
 
 /**
  * 提醒通知。分两个渠道：即将过期 / 已过期，方便用户单独关闭其中一类。
@@ -23,6 +25,8 @@ object FoodNotifier {
 
     const val CHANNEL_EXPIRING = "food_expiring_soon"
     const val CHANNEL_EXPIRED = "food_expired"
+    const val CHANNEL_ITEMS = "household_item_reminders"
+    const val NOTIFICATION_ID_ITEMS = 1004
     const val CHANNEL_PLAN = "food_eating_plan"
     const val NOTIFICATION_ID_PLAN = 1003
 
@@ -34,6 +38,7 @@ object FoodNotifier {
     fun ensureChannels(context: Context) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.createNotificationChannel(NotificationChannel(CHANNEL_ITEMS, "物品提醒", NotificationManager.IMPORTANCE_DEFAULT).apply { description = "物品到期、保养、归还等单次提醒" })
         manager.createNotificationChannel(NotificationChannel(CHANNEL_PLAN, "食用计划", NotificationManager.IMPORTANCE_DEFAULT).apply { description = "自己设置的食用计划，不代表食品过期" })
 
         manager.createNotificationChannel(
@@ -60,7 +65,10 @@ object FoodNotifier {
 
     /** 发送提醒。返回实际发出的通知条数，便于 Worker 打印日志。 */
     fun notifyReminders(context: Context, items: List<FoodItem>, warnDays: Int): Int {
-        if (items.isEmpty()) { cancelAll(context); return 0 }
+        if (items.isEmpty()) {
+            NotificationManagerCompat.from(context).apply { cancel(NOTIFICATION_ID_EXPIRING); cancel(NOTIFICATION_ID_EXPIRED); cancel(NOTIFICATION_ID_PLAN) }
+            return 0
+        }
         ensureChannels(context)
 
         val today = DateUtils.today()
@@ -104,11 +112,20 @@ object FoodNotifier {
         return sent
     }
 
+    fun notifyTasks(context: Context, items: List<Pair<ManagedItem, ItemReminder>>): Int {
+        ensureChannels(context)
+        if (items.isEmpty()) { NotificationManagerCompat.from(context).cancel(NOTIFICATION_ID_ITEMS); return 0 }
+        return post(context, CHANNEL_ITEMS, NOTIFICATION_ID_ITEMS, "${items.size} 件物品需要处理",
+            items.take(3).joinToString("、") { it.first.name },
+            items.joinToString("\n") { "· ${it.first.name}：${it.second.title}（${it.first.location}）" }, 0xFF2E6B4F.toInt())
+    }
+
     fun cancelAll(context: Context) {
         val manager = NotificationManagerCompat.from(context)
         manager.cancel(NOTIFICATION_ID_EXPIRING)
         manager.cancel(NOTIFICATION_ID_EXPIRED)
         manager.cancel(NOTIFICATION_ID_PLAN)
+        manager.cancel(NOTIFICATION_ID_ITEMS)
     }
 
     private fun unitText(item: FoodItem): String =
@@ -160,6 +177,7 @@ object FoodNotifier {
             .setCategory(NotificationCompat.CATEGORY_REMINDER)
             .setColor(colorRes)
             .setGroup(GROUP_KEY)
+            .setOnlyAlertOnce(true)
             .setAutoCancel(true)
             .setContentIntent(pending)
             .build()

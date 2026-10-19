@@ -7,20 +7,26 @@ import androidx.room.RoomDatabase
 
 @Database(
     entities = [
-        FoodItem::class,
+        ManagedItem::class,
+        FoodDetails::class,
+        PhotoAttachment::class,
         AppSettings::class,
         StorageLocation::class,
         CommonFood::class,
+        ItemReminder::class,
     ],
-    version = 1,
+    views = [FoodItem::class],
+    version = 3,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
 
+    abstract fun managedItemDao(): ManagedItemDao
     abstract fun foodDao(): FoodDao
     abstract fun settingsDao(): SettingsDao
     abstract fun storageLocationDao(): StorageLocationDao
     abstract fun commonFoodDao(): CommonFoodDao
+    abstract fun itemReminderDao(): ItemReminderDao
 
     companion object {
         private const val DB_NAME = "food_manager_next.db"
@@ -35,6 +41,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     DB_NAME,
                 )
+                    .addMigrations(HouseholdMigration, ReminderMigration)
                     .build()
                     .also { instance = it }
             }

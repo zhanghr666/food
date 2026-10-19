@@ -32,6 +32,8 @@ data class EntryDraft(
     val specification: String = "",
     val price: String = "",
     val rawText: String = "",
+    val photos: List<String> = emptyList(),
+    val photosLoaded: Boolean = true,
     val warnings: List<String> = emptyList(),
     val dateCandidates: List<Long> = emptyList(),
     val origins: Map<EntryField, FieldOrigin> = emptyMap(),
@@ -55,7 +57,7 @@ data class EntryDraft(
     val hasSuggestedQuantity: Boolean get() = listOf(EntryField.QUANTITY, EntryField.UNIT).all {
         needsConfirmation(it) && origins[it] == FieldOrigin.DERIVED && fieldCandidates[it] == listOf(value(it))
     }
-    val isEmpty: Boolean get() = origins.isEmpty() && !purchaseDateSpecified && name.isBlank() && quantity.isBlank() && unit.isBlank() && category.isBlank() && expiryDate == null && productionDate == null && location.isBlank() && note.isBlank() && brand.isBlank() && specification.isBlank() && price.isBlank() && rawText.isBlank()
+    val isEmpty: Boolean get() = photos.isEmpty() && origins.isEmpty() && !purchaseDateSpecified && name.isBlank() && quantity.isBlank() && unit.isBlank() && category.isBlank() && expiryDate == null && productionDate == null && location.isBlank() && note.isBlank() && brand.isBlank() && specification.isBlank() && price.isBlank() && rawText.isBlank()
 
     fun edit(field: EntryField, value: String): EntryDraft = when (field) {
         EntryField.NAME -> copy(name = value)

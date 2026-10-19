@@ -18,7 +18,7 @@ object CameraFiles {
 
     fun createImageFile(context: Context): File {
         val dir = File(context.cacheDir, DIR_NAME).apply { if (!exists()) mkdirs() }
-        return File(dir, "food_${System.currentTimeMillis()}.jpg")
+        return File(dir, "photo_${java.util.UUID.randomUUID()}.jpg")
     }
 
     fun uriFor(context: Context, file: File): Uri =

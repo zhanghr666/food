@@ -10,6 +10,7 @@ import androidx.work.WorkManager
 import androidx.work.WorkerParameters
 import com.example.foodmanager.FoodApp
 import com.example.foodmanager.core.DateUtils
+import kotlinx.coroutines.flow.first
 import java.util.Calendar
 import java.util.concurrent.TimeUnit
 
@@ -33,14 +34,14 @@ class ExpiryReminderWorker(
             return Result.success()
         }
 
-        val alerts = repository.loadAlertItems(settings.warnDays)
-        if (alerts.isEmpty()) {
-            FoodNotifier.cancelAll(applicationContext)
-            return Result.success()
-        }
-
-        val sent = FoodNotifier.notifyReminders(applicationContext, alerts, settings.warnDays)
-        return Result.success(androidx.work.workDataOf("sent" to sent, "checked" to alerts.size))
+        val today = DateUtils.today()
+        val records = app.items.records.first().filter { !it.archived }.associateBy { it.id }
+        val due = app.items.reminders.first().filter { it.itemId in records && it.due(today, settings.warnDays) }
+        val ids = due.map { it.itemId }.toSet()
+        val alerts = repository.loadAlertItems(settings.warnDays).filter { it.id in ids }
+        val tasks = due.mapNotNull { reminder -> records[reminder.itemId]?.takeIf { it.kind == "object" }?.let { it to reminder } }
+        val sent = FoodNotifier.notifyReminders(applicationContext, alerts, settings.warnDays) + FoodNotifier.notifyTasks(applicationContext, tasks)
+        return Result.success(androidx.work.workDataOf("sent" to sent, "checked" to due.size))
     }
 
     companion object {
@@ -94,7 +95,8 @@ class ExpiryReminderWorker(
 
         /** 供调试：检查一次并同步返回结果说明 */
         suspend fun checkNow(context: Context): String {
-            val repo = FoodApp.from(context).repository
+            val app = FoodApp.from(context)
+            val repo = app.repository
             repo.refreshToday()
             val settings = repo.loadSettings()
             val alerts = repo.loadAlertItems(settings.warnDays)
@@ -102,7 +104,9 @@ class ExpiryReminderWorker(
             val expired = alerts.count { it.dateKind == "expiry" && (it.daysToExpiry(today) ?: Long.MAX_VALUE) < 0 }
             val soon = alerts.count { it.dateKind == "expiry" && (it.daysToExpiry(today) ?: Long.MAX_VALUE) in 0..settings.warnDays.toLong() }
             val plans = alerts.count { it.dateKind == "reminder" && (it.daysToExpiry(today) ?: Long.MAX_VALUE) <= 0 }
-            return "已过期 $expired 件，即将过期 $soon 件，食用计划 $plans 件"
+            val objects = app.items.records.first().filter { it.kind == "object" && !it.archived }.map { it.id }.toSet()
+            val tasks = app.items.reminders.first().count { it.itemId in objects && it.due(today, settings.warnDays) }
+            return "已过期 $expired 件，即将过期 $soon 件，食用计划 $plans 件，物品待提醒 $tasks 件"
         }
     }
 }

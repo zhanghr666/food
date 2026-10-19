@@ -14,10 +14,12 @@ import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -32,64 +34,197 @@ import com.example.foodmanager.ui.components.FoodBottomSheet
 import com.example.foodmanager.ui.components.FoodSearchField
 import com.example.foodmanager.ui.components.FoodSegments
 import com.example.foodmanager.ui.components.FoodTabs
+import com.example.foodmanager.ui.components.EntryExitDialog
+import com.example.foodmanager.ui.components.*
 import com.example.foodmanager.ui.entry.*
 import kotlinx.coroutines.launch
 
+private data class PantryRoute(val route: String, val tab: Int, val detailId: Long, val locationName: String, val locationKind: String) : java.io.Serializable
+
 @Composable
 fun PantryApp(openAlertsOnStart: Boolean = false, onOpenAlertsHandled: () -> Unit = {}) {
-    val repository = (LocalContext.current.applicationContext as FoodApp).repository
+    val app = LocalContext.current.applicationContext as FoodApp
+    val repository = app.repository
     val inventory: InventoryViewModel = viewModel(factory = InventoryViewModel.factory(repository))
     val entry: EntryViewModel = viewModel(factory = EntryViewModel.factory(repository))
+    val objectEntry: ObjectEntryViewModel = viewModel(factory = ObjectEntryViewModel.factory(app.items, repository))
+    val household: HouseholdViewModel = viewModel(factory = HouseholdViewModel.factory(app.items))
     val state by inventory.state.collectAsState()
     val entryState by entry.state.collectAsState()
+    val objects by objectEntry.state.collectAsState()
+    val home by household.state.collectAsState()
+    val actionBusy by household.busy.collectAsState()
     val today by inventory.today.collectAsState()
     val message by inventory.message.collectAsState()
+    val itemMessage by household.message.collectAsState()
     var tab by rememberSaveable { mutableStateOf(0) }
+    var route by rememberSaveable { mutableStateOf("") }
+    var history by rememberSaveable { mutableStateOf(emptyList<PantryRoute>()) }
+    var editPhotos by rememberSaveable { mutableStateOf(false) }
+    var pendingPhotos by rememberSaveable { mutableStateOf(false) }
+    var editingExisting by rememberSaveable { mutableStateOf(false) }
+    var detailId by rememberSaveable { mutableLongStateOf(0L) }
+    var locationKind by rememberSaveable { mutableStateOf("全部") }
+    var locationName by rememberSaveable { mutableStateOf("") }
     var query by rememberSaveable { mutableStateOf("") }
     var location by rememberSaveable { mutableStateOf("") }
     var filter by rememberSaveable { mutableStateOf("全部") }
     var archived by rememberSaveable { mutableStateOf(false) }
-    var pendingEdit by remember { mutableStateOf<FoodItem?>(null) }
+    var exitEntry by rememberSaveable { mutableStateOf(false) }
+    var exitTab by rememberSaveable { mutableStateOf<Int?>(null) }
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    val focusManager = LocalFocusManager.current
+    val pages = rememberSaveableStateHolder()
+    fun pushRoute() { history = history + PantryRoute(route, tab, detailId, locationName, locationKind) }
+    fun back() {
+        val previous = history.lastOrNull()
+        if (previous != null) { history = history.dropLast(1); route = previous.route; tab = previous.tab; detailId = previous.detailId; locationName = previous.locationName; locationKind = previous.locationKind }
+        else if (route.isNotBlank()) route = "" else if (archived) archived = false else tab = 0
+    }
+    fun entryRoute(value: String, nextTab: Int = tab) { pushRoute(); editPhotos = false; editingExisting = false; route = value; tab = nextTab }
+    fun locationRoute(name: String, kind: String) { pushRoute(); locationName = name; locationKind = kind; route = "location-items" }
+    fun leaveEntry() {
+        entry.cancelVoice(); objectEntry.cancelVoice()
+        if (route == "food-entry") entry.clear() else if (route == "object-entry") objectEntry.clear()
+        val next = exitTab
+        exitEntry = false; exitTab = null
+        if (next == null) back() else { history = emptyList(); tab = next; route = "" }
+    }
+    fun requestEntryExit(nextTab: Int? = null) {
+        val food = route == "food-entry"
+        val busy = if (food) entryState.saving || (entryState.busy && !entryState.recording) else objects.saving || (objects.busy && !objects.recording)
+        if (busy) return
+        focusManager.clearFocus()
+        if (food) entry.cancelVoice() else objectEntry.cancelVoice()
+        exitTab = nextTab
+        if (if (food) entry.hasUnsavedChanges() else objectEntry.hasUnsavedChanges()) exitEntry = true else leaveEntry()
+    }
     DateRefreshEffect { inventory.refreshToday() }
+    // 进程重建后只恢复页面导航，不恢复表单；避免空表单被当作原记录的编辑。
+    LaunchedEffect(route, editingExisting, entryState.current.itemId, entryState.saved, objects.draft.id, objects.saved) {
+        if (editingExisting && (route == "food-entry" && entryState.current.itemId == 0L && !entryState.saved && !entryState.saving ||
+                route == "object-entry" && objects.draft.id == 0L && !objects.saved && !objects.saving)) back()
+    }
     LaunchedEffect(openAlertsOnStart) { if (openAlertsOnStart) {
-        tab = 0; archived = false; filter = "需处理"; query = ""; location = ""; onOpenAlertsHandled()
+        if (route == "food-entry" || route == "object-entry") {
+            onOpenAlertsHandled(); snackbar.showSnackbar("请先保存或取消当前录入，再打开提醒清单")
+        } else { history = emptyList(); tab = 0; route = "reminders"; onOpenAlertsHandled() }
     } }
     LaunchedEffect(entryState.saved) { if (entryState.saved) {
-        val savedMessage = entryState.message; tab = 0; archived = false; filter = "全部"; query = ""; location = ""
-        snackbar.showSnackbar(savedMessage)
-        entry.consumeSaved()
+        val savedMessage = entryState.message
+        if (editingExisting) back() else { history = emptyList(); tab = 0; route = ""; archived = false; filter = "全部"; query = ""; location = "" }
+        entry.consumeSaved(); snackbar.showSnackbar(savedMessage)
     } }
-    LaunchedEffect(message) { if (message.isNotBlank()) { snackbar.showSnackbar(message); inventory.consumeMessage() } }
-    BackHandler(tab != 0 || archived) { if (archived) archived = false else tab = 0 }
-    fun edit(item: FoodItem) { if (entryState.dirty) pendingEdit = item else { entry.beginEdit(item); tab = 1 } }
-    fun archive(item: FoodItem) { inventory.archive(item, true) {
-        scope.launch { if (snackbar.showSnackbar("${item.name}已归档", "撤销", duration = SnackbarDuration.Long) == SnackbarResult.ActionPerformed) inventory.archive(item, false) }
+    LaunchedEffect(objects.saved) { if (objects.saved) {
+        val savedMessage = objects.message
+        if (editingExisting) back() else { history = emptyList(); tab = 1; route = "" }
+        objectEntry.consumeSaved(); snackbar.showSnackbar(savedMessage)
     } }
-    PantryLayout(tab, entryState.dirty, snackbar, { tab = it }) {
-        when (tab) {
-            0 -> PantryScreen(state, today, query, { query = it }, location, { location = it }, filter, { filter = it }, archived,
-                { archived = !archived }, { tab = 1 }, ::edit, ::archive, { inventory.archive(it, false) }, inventory::quantity, inventory::delete)
-            1 -> EntryScreen(entry)
-            2 -> LocationScreen(state, { name -> tab = 0; archived = false; location = name; query = ""; filter = "全部" }, inventory)
-            3 -> PreferencesScreen(state, inventory, { tab = 0; archived = true })
+    LaunchedEffect(message) { if (message.isNotBlank()) { inventory.consumeMessage(); snackbar.showSnackbar(message) } }
+    LaunchedEffect(itemMessage) { if (itemMessage.isNotBlank()) { household.consumeMessage(); snackbar.showSnackbar(itemMessage) } }
+    BackHandler(route.isNotBlank() || tab != 0 || archived) {
+        if (route == "food-entry" || route == "object-entry") requestEntryExit()
+        else if (!(route == "detail" && actionBusy)) back()
+    }
+    fun doEdit(item: ManagedItem) {
+        if (item.kind == "food") {
+            val food = (state.items + state.archived).firstOrNull { it.id == item.id } ?: return
+            entry.beginEdit(food); entryRoute("food-entry", 0)
+        } else { objectEntry.beginEdit(item); entryRoute("object-entry", 1) }
+        editPhotos = pendingPhotos
+        editingExisting = true
+    }
+    fun edit(item: ManagedItem, photos: Boolean = false) {
+        if (item.kind == "food" && (entryState.saving || entryState.busy) || item.kind == "object" && (objects.saving || objects.busy)) return
+        pendingPhotos = photos
+        doEdit(item)
+    }
+    fun open(item: ManagedItem) {
+        pushRoute(); detailId = item.id; route = "detail"
+    }
+    fun addFood() { if (entry.beginNew()) entryRoute("food-entry", 0) }
+    fun addObject() { if (objectEntry.beginNew()) entryRoute("object-entry", 1) }
+    fun archiveRecord(item: ManagedItem) {
+        household.setArchived(item, !item.archived) {
+            scope.launch {
+                snackbar.currentSnackbarData?.dismiss()
+                val result = snackbar.showSnackbar(if (item.archived) "已恢复「${item.name}」" else "已归档「${item.name}」", if (item.archived) null else "撤销", duration = SnackbarDuration.Long)
+                if (result == SnackbarResult.ActionPerformed) household.setArchived(item, false) { scope.launch { snackbar.showSnackbar("已恢复库存") } }
+            }
         }
     }
-    pendingEdit?.let { item -> AlertDialog(onDismissRequest = { pendingEdit = null }, title = { Text("还有未保存的录入") }, text = { Text("打开编辑会替换当前草稿，也可以先保存当前录入。") },
-        confirmButton = { TextButton(onClick = { entry.beginEdit(item); pendingEdit = null; tab = 1 }) { Text("替换草稿并编辑") } },
-        dismissButton = { TextButton(onClick = { pendingEdit = null; tab = 1 }) { Text("返回草稿") } }) }
+    PantryLayout(tab, snackbar, { next ->
+        if (route == "food-entry" || route == "object-entry") requestEntryExit(next)
+        else { entry.cancelVoice(); objectEntry.cancelVoice(); history = emptyList(); tab = next; route = "" }
+    }, showNavigation = route != "detail") {
+        when (route) {
+            "search" -> GlobalSearchScreen(home, ::back, ::open)
+            "reminders" -> ReminderCenter(home, today, state.settings.warnDays, actionBusy, ::back, ::open, household::complete, household::snooze)
+            "food-entry" -> EntryScreen(entry, focusPhotos = editPhotos, onBack = { requestEntryExit() })
+            "object-entry" -> ObjectEntryScreen(objectEntry, focusPhotos = editPhotos, onBack = { requestEntryExit() })
+            "location-items" -> pages.SaveableStateProvider("location:$locationName:$locationKind") { LocationContentsScreen(home, locationName, locationKind, ::back, ::open) }
+            "detail" -> {
+                val item = home.records.firstOrNull { it.id == detailId }
+                val detailBusy = actionBusy || (entryState.current.itemId == detailId && (entryState.busy || entryState.saving)) || (objects.draft.id == detailId && (objects.busy || objects.saving))
+                pages.SaveableStateProvider("detail:$detailId") {
+                    ItemDetailScreen(item, (state.items + state.archived).firstOrNull { it.id == detailId }, home.photoKeys(detailId), app.items.photoStore, today, detailBusy,
+                        ::back, { item?.let { edit(it) } }, { item?.let(::archiveRecord) }, { item?.let { household.delete(it) { back() } } },
+                        { item?.let { locationRoute(it.location, "全部") } }, { item?.let { edit(it, photos = true) } }, state.locations.map { it.name }, state.settings.warnDays,
+                        { value, done -> item?.let { record -> household.quantity(record, value) { result ->
+                            if (result.isSuccess) {
+                                entry.syncRecord(record.id, EntryField.QUANTITY, formatAmount(value))
+                                objectEntry.syncRecord(record.id, "quantity", formatAmount(value))
+                            }; done(result)
+                        } } },
+                        { value, done -> item?.let { record -> household.location(record, value) { result ->
+                            if (result.isSuccess) {
+                                entry.syncRecord(record.id, EntryField.LOCATION, value.trim())
+                                objectEntry.syncRecord(record.id, "location", value.trim())
+                            }; done(result)
+                        } } },
+                        { value, done -> item?.let { record -> household.date(record, value) { result ->
+                            if (result.isSuccess) entry.syncRecordDate(record.id, value)
+                            done(result)
+                        } } }, loading = !home.loaded, reminderContent = {
+                            item?.let { record -> ItemReminderSection(record, home.reminders.firstOrNull { it.itemId == record.id }, today, state.settings.warnDays, detailBusy,
+                                { title, date, done -> household.reminder(record.id, title, date, done) },
+                                { done -> household.removeReminder(record.id, done) },
+                                { household.complete(record.id, home.reminders.firstOrNull { it.itemId == record.id }?.completed != true) },
+                                { household.snooze(record.id, it) }) }
+                        })
+                }
+            }
+            else -> pages.SaveableStateProvider("home:$tab") { when (tab) {
+                0 -> PantryScreen(state, today, query, { query = it }, location, { location = it }, filter, { filter = it }, archived,
+                    { archived = !archived }, ::addFood, { edit(it.common()) }, { archiveRecord(it.common()) }, { archiveRecord(it.common()) }, { item, value, done -> household.quantity(item.common(), value, done) }, { household.delete(it.common()) {} },
+                    onOpen = { open(it.common()) }, photoCounts = home.photos.groupingBy { it.itemId }.eachCount(), actionBusy = actionBusy, onSearch = { pushRoute(); route = "search" }, onReminders = { pushRoute(); route = "reminders" }, onBatch = { ids, oldArchived, action, target, done -> household.batch(ids, "food", oldArchived, action, target, done) })
+                1 -> ObjectInventoryScreen(home, ::addObject, ::open, today, { edit(it) }, ::archiveRecord,
+                    { item, value, done -> household.quantity(item, value, done) }, { household.delete(it) {} }, actionBusy, { pushRoute(); route = "search" }, { pushRoute(); route = "reminders" },
+                    { ids, oldArchived, action, target, done -> household.batch(ids, "object", oldArchived, action, target, done) })
+                2 -> LocationScreen(state, home, ::locationRoute, inventory, household)
+                3 -> PreferencesScreen(state, inventory, { history = emptyList(); tab = 0; archived = true; route = "" })
+            } }
+        }
+    }
+    if (exitEntry) {
+        val food = route == "food-entry"
+        val saving = if (food) entryState.saving || entryState.busy else objects.saving || objects.busy
+        EntryExitDialog(editing = editingExisting, busy = saving,
+            onContinue = { exitEntry = false; exitTab = null },
+            onDiscard = ::leaveEntry)
+    }
 }
 
 /** Scaffold 的边距先消费，再补键盘剩余边距；录入内容只保留一个滚动视口。 */
 @Composable
-internal fun PantryLayout(tab: Int, hasDraft: Boolean, snackbar: SnackbarHostState, onTab: (Int) -> Unit,
-    content: @Composable () -> Unit) {
+internal fun PantryLayout(tab: Int, snackbar: SnackbarHostState, onTab: (Int) -> Unit,
+    showNavigation: Boolean = true, content: @Composable () -> Unit) {
     val keyboardVisible = WindowInsets.ime.getBottom(LocalDensity.current) > 0
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }, bottomBar = {
-        if (!keyboardVisible) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-            listOf("食物" to Icons.Outlined.Kitchen, "录入" to Icons.Outlined.AddCircleOutline, "位置" to Icons.Outlined.Place, "设置" to Icons.Outlined.Tune).forEachIndexed { index, (label, icon) ->
-                NavigationBarItem(tab == index, { onTab(index) }, icon = { Icon(icon, label) }, label = { Text(if (index == 1 && hasDraft) "录入 · 草稿" else label) },
+        if (showNavigation && !keyboardVisible) NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
+            listOf("食物" to Icons.Outlined.Kitchen, "物品" to Icons.Outlined.Inventory2, "位置" to Icons.Outlined.Place, "设置" to Icons.Outlined.Tune).forEachIndexed { index, (label, icon) ->
+                NavigationBarItem(tab == index, { onTab(index) }, icon = { Icon(icon, label) }, label = { Text(label) },
                     colors = NavigationBarItemDefaults.colors(indicatorColor = androidx.compose.ui.graphics.Color.Transparent,
                         selectedIconColor = MaterialTheme.colorScheme.primary, selectedTextColor = MaterialTheme.colorScheme.primary))
             }
@@ -111,9 +246,8 @@ fun FoodItem.dateDescription(today: Long): String {
 private fun PantryScreen(state: InventoryState, today: Long, query: String, onQuery: (String) -> Unit,
     location: String, onLocation: (String) -> Unit, filter: String, onFilter: (String) -> Unit, archived: Boolean,
     toggleArchive: () -> Unit, onAdd: () -> Unit, onEdit: (FoodItem) -> Unit, onArchive: (FoodItem) -> Unit,
-    onRestore: (FoodItem) -> Unit, onQuantity: (FoodItem, Double) -> Unit, onDelete: (FoodItem) -> Unit) {
+    onRestore: (FoodItem) -> Unit, onQuantity: (FoodItem, Double, (Result<Unit>) -> Unit) -> Unit, onDelete: (FoodItem) -> Unit, onOpen: (FoodItem) -> Unit = onEdit, photoCounts: Map<Long, Int> = emptyMap(), actionBusy: Boolean = false, onSearch: () -> Unit, onReminders: () -> Unit, onBatch: (List<Long>, Boolean, String, String, (Result<Unit>) -> Unit) -> Unit) {
     var quantityItem by remember { mutableStateOf<FoodItem?>(null) }
-    var quantityValue by remember { mutableStateOf("") }
     var deleteItem by remember { mutableStateOf<FoodItem?>(null) }
     var choosingLocation by remember { mutableStateOf(false) }
     var moreFilters by remember { mutableStateOf(false) }
@@ -121,41 +255,28 @@ private fun PantryScreen(state: InventoryState, today: Long, query: String, onQu
     val locationItems = if (archived) state.archived else state.items
     val locationOptions = (state.locations.map { it.name } + locationItems.map { it.location } + location)
         .filter(String::isNotBlank).distinct()
-    val list = (if (archived) state.archived else state.items).filter { item ->
-        (query.isBlank() || listOf(item.name, item.category, item.location, item.note, item.brand).any { it.contains(query, true) }) &&
-        (location.isBlank() || item.location == location) && (archived || when (filter) {
+    var order by rememberSaveable { mutableStateOf("最近录入") }
+    val filtered = (if (archived) state.archived else state.items).filter { item ->
+        HouseholdSearch.matches(item.common(), query, state.locations) &&
+        (location.isBlank() || HouseholdSearch.placeMatches(item.location, location, state.locations)) && (archived || when (filter) {
             "需处理" -> (item.daysToExpiry(today) ?: Long.MAX_VALUE) <= state.settings.warnDays
             "临期" -> item.dateKind == "expiry" && item.status(today, state.settings.warnDays) == FoodStatus.EXPIRING_SOON
             "过期" -> item.dateKind == "expiry" && item.status(today, state.settings.warnDays) == FoodStatus.EXPIRED
             "食用计划" -> item.dateKind == "reminder"; else -> true
         })
     }
+    val list = InventoryOrder.foods(filtered, order).let { sorted -> if (query.isBlank()) sorted else sorted.sortedBy { HouseholdSearch.rank(it.common(), query, state.locations) } }
     val soon = state.items.count { it.dateKind == "expiry" && it.status(today, state.settings.warnDays) == FoodStatus.EXPIRING_SOON }
     val expired = state.items.count { it.dateKind == "expiry" && it.status(today, state.settings.warnDays) == FoodStatus.EXPIRED }
-    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) { Text(if (archived) "已归档" else "我的食物", style = MaterialTheme.typography.headlineMedium); Text("食物管家 · ${DateUtils.formatShort(today)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        } }
-        if (!archived) {
-            item { Card(shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.primaryContainer)) {
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                    listOf(Triple(state.items.size, "件在库", "全部"), Triple(soon, "件临期", "临期"), Triple(expired, "件过期", "过期")).forEach { (count, label, key) ->
-                        TextButton(onClick = { onFilter(key) }, modifier = Modifier.weight(1f)) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Text("$count", style = MaterialTheme.typography.headlineMedium,
-                                    color = when (key) { "临期" -> MaterialTheme.colorScheme.tertiary; "过期" -> MaterialTheme.colorScheme.error; else -> MaterialTheme.colorScheme.primary })
-                                Text(label, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onPrimaryContainer)
-                            }
-                        }
-                    }
-                }
-            } }
-            item { Button(onClick = onAdd, shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)) {
-                Icon(Icons.Outlined.AddCircleOutline, contentDescription = null)
-                Spacer(Modifier.width(8.dp)); Text("录入食物")
-            } }
-        }
-        item { FoodSearchField(query, onQuery, "搜索食物、位置或品牌") }
+    InventoryBatchLayout(list.map { it.id }, listOf(query, location, filter, archived.toString()), archived, actionBusy, state.locations,
+        { ids, action, target, done -> onBatch(ids, archived, action, target, done) }) { selectionMode, selected, toggle, select ->
+    LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        item { InventoryHeading(if (archived) "已归档食物" else "我的食物", today, onSearch, onReminders) }
+        if (!archived) item { InventoryStats(listOf(
+            InventoryStat("${state.items.size}", "件在库", MaterialTheme.colorScheme.primary) { onFilter("全部"); onQuery(""); onLocation("") },
+            InventoryStat("$soon", "件临期", MaterialTheme.colorScheme.tertiary) { onFilter("临期") },
+            InventoryStat("$expired", "件过期", MaterialTheme.colorScheme.error) { onFilter("过期") })) }
+        item { InventorySearchActions(query, onQuery, "搜索名称、位置", "录入食物", onAdd) }
         item {
             if (!archived) FoodTabs(listOf("全部", "临期", "过期", "食用计划"), filter, onFilter)
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -169,7 +290,7 @@ private fun PantryScreen(state: InventoryState, today: Long, query: String, onQu
                 }
                 Box {
                     TextButton(onClick = { moreFilters = true }) {
-                        Text(if (archived) "已归档" else if (filter == "需处理") "需处理" else "更多筛选")
+                        Text(if (archived) "已归档" else if (filter == "需处理") "需处理" else "筛选")
                         Icon(Icons.Outlined.ExpandMore, null, Modifier.size(18.dp))
                     }
                     DropdownMenu(moreFilters, { moreFilters = false }) {
@@ -179,80 +300,69 @@ private fun PantryScreen(state: InventoryState, today: Long, query: String, onQu
                     }
                 }
             }
-            Text("共 ${list.size} 件", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Text("共 ${list.size} 件", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                InventorySort(order, InventoryOrder.foodOptions, { order = it })
+            }
         }
         if (!state.loaded) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-        else if (list.isEmpty()) item { Column(Modifier.fillMaxWidth().padding(vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        else if (list.isEmpty()) item { Column(Modifier.fillMaxWidth().padding(vertical = 40.dp), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Icon(Icons.Outlined.Eco, null, Modifier.size(48.dp), tint = MaterialTheme.colorScheme.primary)
             Text(if (query.isNotBlank() || location.isNotBlank() || filter != "全部") "没有符合条件的食物" else if (archived) "还没有归档记录" else "从第一件食物开始", style = MaterialTheme.typography.titleMedium)
         } }
         items(list, key = { it.id }) { item ->
-            var menu by remember { mutableStateOf(false) }
-            Card(onClick = { onEdit(item) }, shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 12.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-                        Text(item.name, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f), maxLines = 2, overflow = TextOverflow.Ellipsis)
-                        Text(item.dateDescription(today), modifier = Modifier.weight(1f).padding(start = 8.dp),
-                            style = MaterialTheme.typography.labelLarge, textAlign = TextAlign.End, color = when {
-                                item.expiryDate == null -> MaterialTheme.colorScheme.onSurfaceVariant
-                                item.dateKind == "expiry" && item.status(today, state.settings.warnDays) == FoodStatus.EXPIRED -> MaterialTheme.colorScheme.error
-                                (item.daysToExpiry(today) ?: Long.MAX_VALUE) <= state.settings.warnDays -> MaterialTheme.colorScheme.tertiary
-                                else -> MaterialTheme.colorScheme.primary
-                            })
-                        Box { IconButton(onClick = { menu = true }) { Icon(Icons.Outlined.MoreVert, "更多操作") }
-                            DropdownMenu(menu, { menu = false }) {
-                                DropdownMenuItem({ Text("编辑全部信息") }, { menu = false; onEdit(item) })
-                                DropdownMenuItem({ Text("修改余量") }, { menu = false; quantityItem = item; quantityValue = if (item.quantitySpecified) formatAmount(item.quantity) else "" })
-                                DropdownMenuItem({ Text(if (archived) "恢复到库存" else "已用完 / 归档") }, { menu = false; if (archived) onRestore(item) else onArchive(item) })
-                                DropdownMenuItem({ Text("永久删除", color = MaterialTheme.colorScheme.error) }, { menu = false; deleteItem = item })
-                            }
-                        }
-                    }
-                    Text("${if (item.quantitySpecified) formatAmount(item.quantity) + item.unit else "数量未填"} · ${item.location.ifBlank { "位置未填" }}",
-                        style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("${item.category.ifBlank { "未分类" }} · ${if (item.dateKind == "reminder") "计划" else "到期"} ${DateUtils.format(item.expiryDate)}", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    if (item.brand.isNotBlank() || item.specification.isNotBlank()) Text(listOf(item.brand, item.specification).filter(String::isNotBlank).joinToString(" · "), style = MaterialTheme.typography.bodySmall)
-                    if (item.note.isNotBlank()) Text(item.note, maxLines = 2, style = MaterialTheme.typography.bodySmall)
-                }
-            }
+            val photos = photoCounts[item.id] ?: 0
+            val metadata = listOfNotNull(item.category.ifBlank { "未分类" },
+                item.expiryDate?.let { "${if (item.dateKind == "reminder") "计划" else "到期"} ${DateUtils.format(it)}" },
+                if (photos > 0) "照片 $photos 张" else null).joinToString(" · ")
+            InventoryRecordCard(item.name, if (item.quantitySpecified) formatAmount(item.quantity) + item.unit else "数量未填",
+                item.location, metadata, DetailNotes.from(item.note).user,
+                status = if (archived) "已归档" else item.dateDescription(today), statusColor = when {
+                    archived || item.expiryDate == null -> MaterialTheme.colorScheme.onSurfaceVariant
+                    item.dateKind == "expiry" && item.status(today, state.settings.warnDays) == FoodStatus.EXPIRED -> MaterialTheme.colorScheme.error
+                    (item.daysToExpiry(today) ?: Long.MAX_VALUE) <= state.settings.warnDays -> MaterialTheme.colorScheme.tertiary
+                    else -> MaterialTheme.colorScheme.primary
+                }, archived = archived, busy = actionBusy, onOpen = { if (selectionMode) toggle(item.id) else onOpen(item) }, onEdit = { onEdit(item) },
+                onQuantity = { quantityItem = item }, onArchive = { if (archived) onRestore(item) else onArchive(item) }, onDelete = { deleteItem = item },
+                selectionMode = selectionMode, selected = item.id in selected, onLongPress = { select(item.id) })
         }
     }
-    if (choosingLocation) LocationFilterSheet(locationOptions, locationItems, location, locationSort, { locationSort = it },
-        onPick = { onLocation(it); choosingLocation = false }, onDismiss = { choosingLocation = false })
-    quantityItem?.let { item -> AlertDialog(onDismissRequest = { quantityItem = null }, title = { Text("${item.name}的余量") }, text = {
-        OutlinedTextField(quantityValue, { quantityValue = it }, label = { Text("数量（${item.unit}）") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Decimal))
-    }, confirmButton = { TextButton(onClick = { quantityValue.toDoubleOrNull()?.let { onQuantity(item, it) }; quantityItem = null }, enabled = quantityValue.toDoubleOrNull()?.let { it.isFinite() && it >= 0 } == true) { Text("保存") } }, dismissButton = { TextButton(onClick = { quantityItem = null }) { Text("取消") } }) }
-    deleteItem?.let { item -> AlertDialog(onDismissRequest = { deleteItem = null }, title = { Text("永久删除${item.name}？") }, text = { Text("此操作无法撤销，也可以选择归档。") }, confirmButton = { TextButton(onClick = { onDelete(item); deleteItem = null }) { Text("删除") } }, dismissButton = { TextButton(onClick = { deleteItem = null }) { Text("取消") } }) }
+    }
+    if (choosingLocation) InventoryLocationPicker(locationOptions, locationItems.groupingBy { it.location }.eachCount(), locationItems.size, location, locationSort, { locationSort = it },
+        onPick = { onLocation(it); choosingLocation = false }, onDismiss = { choosingLocation = false }, pinned = state.locations.filter { it.sortOrder < 0 }.map { it.name })
+    quantityItem?.let { item -> InventoryQuantityDialog(item.id, item.name, item.unit, item.quantity, item.quantitySpecified,
+        { quantityItem = null }, { value, done -> onQuantity(item, value, done) }) }
+    deleteItem?.let { item -> InventoryDeleteDialog(item.name, actionBusy, { deleteItem = null }, { onDelete(item); deleteItem = null }) }
 }
 
 @Composable
-private fun LocationFilterSheet(options: List<String>, items: List<FoodItem>, current: String, sort: String, onSort: (String) -> Unit,
-    onPick: (String) -> Unit, onDismiss: () -> Unit) {
+internal fun InventoryLocationPicker(options: List<String>, counts: Map<String, Int>, total: Int, current: String, sort: String, onSort: (String) -> Unit,
+    onPick: (String) -> Unit, onDismiss: () -> Unit, pinned: List<String> = emptyList()) {
     var search by rememberSaveable { mutableStateOf("") }
-    val counts = items.groupingBy { it.location }.eachCount()
     val filtered = options.filter { search.isBlank() || it.contains(search.trim(), ignoreCase = true) }
     val matching = when (sort) {
         "从多到少" -> filtered.sortedByDescending { counts[it] ?: 0 }
         "从少到多" -> filtered.sortedBy { counts[it] ?: 0 }
         else -> filtered
-    }
+    }.sortedBy { if (it in pinned) pinned.indexOf(it) else Int.MAX_VALUE }
     val listState = rememberLazyListState()
     LaunchedEffect(sort, search) { listState.scrollToItem(0) }
     FoodBottomSheet(onDismiss = onDismiss) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text("按位置查看", style = MaterialTheme.typography.titleLarge)
-                Text("选择位置，查看这里的食物", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text("选择位置，查看这里的库存", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             IconButton(onClick = onDismiss) { Icon(Icons.Outlined.Close, contentDescription = "关闭位置选择") }
         }
         Spacer(Modifier.height(16.dp))
         FoodSearchField(search, { search = it }, "搜索存放位置")
         Spacer(Modifier.height(12.dp))
-        LocationChoiceRow("全部位置", items.size, current.isBlank()) { onPick("") }
+        LocationChoiceRow("全部位置", total, current.isBlank()) { onPick("") }
         Text(if (search.isBlank()) "存放位置 · ${options.size}" else "搜索结果 · ${matching.size}",
             style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(top = 16.dp, bottom = 8.dp))
+        if (pinned.isNotEmpty()) Text("常用置顶优先，其余按所选方式排序", style = MaterialTheme.typography.bodySmall)
         FoodSegments(listOf("从多到少", "从少到多", "不排序").map { it to it }, sort, onSort)
         Spacer(Modifier.height(8.dp))
         LazyColumn(Modifier.fillMaxWidth().weight(1f, fill = false).heightIn(max = 420.dp),
@@ -261,7 +371,7 @@ private fun LocationFilterSheet(options: List<String>, items: List<FoodItem>, cu
             if (matching.isEmpty()) item {
                 Column(Modifier.fillMaxWidth().padding(vertical = 24.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(if (options.isEmpty()) "还没有存放位置" else "没有找到这个位置", style = MaterialTheme.typography.bodyMedium)
-                    Text(if (options.isEmpty()) "录入食物时可以直接填写" else "试试输入位置名称的一部分", style = MaterialTheme.typography.bodySmall,
+                    Text(if (options.isEmpty()) "录入时可以直接填写" else "试试输入位置名称的一部分", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.padding(top = 4.dp))
                 }
             }
@@ -287,28 +397,57 @@ private fun LocationChoiceRow(name: String, count: Int, selected: Boolean, onPic
 }
 
 @Composable
-private fun LocationScreen(state: InventoryState, onOpen: (String) -> Unit, vm: InventoryViewModel) {
+private fun LocationScreen(state: InventoryState, home: HouseholdState, onOpen: (String, String) -> Unit, vm: InventoryViewModel, household: HouseholdViewModel) {
+    val records = home.records
+    var placeEdit by remember { mutableStateOf<Pair<String, String>?>(null) }
     var adding by remember { mutableStateOf(false) }; var name by remember { mutableStateOf("") }
-    var editingAlias by remember { mutableStateOf<StorageLocation?>(null) }; var alias by remember { mutableStateOf("") }
     var removing by remember { mutableStateOf<StorageLocation?>(null) }
+    var kind by rememberSaveable { mutableStateOf("全部") }; var search by rememberSaveable { mutableStateOf("") }
+    var sort by rememberSaveable { mutableStateOf("从多到少") }
+    val active = records.filter { !it.archived && (kind == "全部" || it.kind == if (kind == "食品") "food" else "object") }
+    val names = (state.locations.map { it.name } + active.map { it.location }).filter(String::isNotBlank).distinct()
+        .filter { search.isBlank() || HouseholdSearch.normalize(it).contains(HouseholdSearch.normalize(search)) || state.locations.firstOrNull { loc -> loc.name == it }?.aliasList?.any { alias -> HouseholdSearch.normalize(alias).contains(HouseholdSearch.normalize(search)) } == true }
+    val counts = active.groupingBy { it.location }.eachCount()
+    val ordered = when(sort) { "从多到少" -> names.sortedByDescending { counts[it] ?: 0 }; "从少到多" -> names.sortedBy { counts[it] ?: 0 }; else -> names }
+    val options = ordered.sortedBy { name -> state.locations.firstOrNull { it.name == name }?.sortOrder?.takeIf { it < 0 } ?: 0 }
     LazyColumn(Modifier.fillMaxSize(), contentPadding = PaddingValues(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         item { Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) { Text("存放位置", style = MaterialTheme.typography.titleLarge); TextButton(onClick = { adding = true }) { Text("＋ 新位置") } } }
-        item { Text("按实际位置管理，也可以为语音设置顺口的别名。", style = MaterialTheme.typography.bodyMedium) }
-        items((state.locations.map { it.name } + state.items.map { it.location }).filter(String::isNotBlank).distinct(), key = { it }) { location ->
+        item { Text("食品和物品共用位置 · 常用置顶优先，其余按所选方式排序", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        item { FoodTabs(listOf("全部", "食品", "物品"), kind, { kind = it }) }
+        item { FoodSearchField(search, { search = it }, "搜索位置或语音别名") }
+        item { FoodSegments(listOf("从多到少", "从少到多", "不排序").map { it to it }, sort, { sort = it }) }
+        if (options.isEmpty()) item { Text("暂无符合条件的位置", modifier = Modifier.padding(vertical = 32.dp), style = MaterialTheme.typography.bodyMedium) }
+        items(options, key = { it }) { location ->
             val saved = state.locations.firstOrNull { it.name == location }
-            Card(onClick = { onOpen(location) }, shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
-                Column(Modifier.fillMaxWidth().padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) { Text(location, style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f)); Text("${state.items.count { it.location == location }} 件", style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary) }
-                    if (saved != null) { Text("语音别名：${saved.alias.ifBlank { "未设置" }}", style = MaterialTheme.typography.bodySmall)
-                        Row { TextButton(onClick = { editingAlias = saved; alias = saved.alias }) { Text("设置别名") }; TextButton(onClick = { removing = saved }) { Text("移除位置选项") } }
-                    } else Text("录入时填写的位置", style = MaterialTheme.typography.bodySmall)
+            var menu by remember { mutableStateOf(false) }
+            Card(onClick = { onOpen(location, kind) }, shape = RoundedCornerShape(12.dp), colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surface)) {
+                Row(Modifier.fillMaxWidth().padding(16.dp), horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(Icons.Outlined.Place, null, tint = MaterialTheme.colorScheme.primary)
+                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(location + if ((saved?.sortOrder ?: 0) < 0) " · 常用" else "", style = MaterialTheme.typography.titleMedium)
+                        val foodCount = records.count { !it.archived && it.kind == "food" && it.location == location }
+                        val objectCount = records.count { !it.archived && it.kind == "object" && it.location == location }
+                        Text(if (kind == "全部") "食品 $foodCount · 物品 $objectCount" else "${counts[location] ?: 0} 条${kind}记录", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        if (saved?.alias?.isNotBlank() == true) Text("别名：${saved.alias}", style = MaterialTheme.typography.bodySmall)
+                    }
+                    Text("${counts[location] ?: 0}", style = MaterialTheme.typography.titleMedium, color = MaterialTheme.colorScheme.primary)
+                    Box {
+                        IconButton({ menu = true }) { Icon(Icons.Outlined.MoreVert, "位置设置") }
+                        DropdownMenu(menu, { menu = false }) {
+                            DropdownMenuItem({ Text("重命名位置") }, { placeEdit = location to "重命名"; menu = false })
+                            DropdownMenuItem({ Text("合并到其他位置") }, { placeEdit = location to "合并"; menu = false })
+                            DropdownMenuItem({ Text("设置位置别名") }, { placeEdit = location to "别名"; menu = false })
+                            DropdownMenuItem({ Text(if ((saved?.sortOrder ?: 0) < 0) "取消常用置顶" else "常用置顶") }, { household.pin(location, (saved?.sortOrder ?: 0) >= 0); menu = false })
+                            if (saved != null) DropdownMenuItem({ Text("移除常用选项") }, { removing = saved; menu = false })
+                        }
+                    }
                 }
             }
         }
     }
+    placeEdit?.let { (source, mode) -> PlaceEditor(source, mode, home, { placeEdit = null }, household::changePlace, household::aliases) }
     if (adding) AlertDialog(onDismissRequest = { adding = false }, title = { Text("新增位置") }, text = { OutlinedTextField(name, { name = it }, label = { Text("例如：餐桌、厨房抽屉") }, singleLine = true) }, confirmButton = { TextButton(onClick = { vm.addLocation(name); name = ""; adding = false }, enabled = name.isNotBlank()) { Text("添加") } }, dismissButton = { TextButton(onClick = { adding = false }) { Text("取消") } })
-    editingAlias?.let { loc -> AlertDialog(onDismissRequest = { editingAlias = null }, title = { Text("${loc.name}的别名") }, text = { OutlinedTextField(alias, { alias = it }, label = { Text("多个别名用逗号分开") }) }, confirmButton = { TextButton(onClick = { vm.alias(loc.id, alias); editingAlias = null }) { Text("保存") } }, dismissButton = { TextButton(onClick = { editingAlias = null }) { Text("取消") } }) }
-    removing?.let { loc -> AlertDialog(onDismissRequest = { removing = null }, title = { Text("移除${loc.name}的位置选项？") }, text = { Text("已有食物仍保留这个位置，库存记录不会删除。") }, confirmButton = { TextButton(onClick = { vm.removeLocation(loc.id); removing = null }) { Text("移除") } }, dismissButton = { TextButton(onClick = { removing = null }) { Text("取消") } }) }
+    removing?.let { loc -> AlertDialog(onDismissRequest = { removing = null }, title = { Text("移除${loc.name}的常用选项？") }, text = { Text("已有食品和物品保留原位置，库存记录不会删除。") }, confirmButton = { TextButton(onClick = { vm.removeLocation(loc.id); removing = null }) { Text("移除") } }, dismissButton = { TextButton(onClick = { removing = null }) { Text("取消") } }) }
 }
 
 @OptIn(ExperimentalLayoutApi::class)

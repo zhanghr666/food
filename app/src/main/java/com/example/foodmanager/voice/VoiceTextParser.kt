@@ -283,17 +283,7 @@ object VoiceTextParser {
 
     /** 动词/位置标签限定地点，句号、日期等限定结束；不依赖配置词表。 */
     private fun matchSpokenLocation(text: String): SpokenLocation? {
-        val number = "[0-9零〇一二两三四五六七八九十百]+"
-        val duration = "$number(?:个)?(?:天|月|日|号|年|周|星期|小时)"
-        val ending = "放着|摆着|搁着|存着|[，,。；;！？!?\\n]|今天|明天|后天|(?:还有|有|剩下|剩|再过)?$duration|到期|过期|保质期|生产日期|数量|分类|类别|属于|备注|$"
-        val prefix = "(?:存放在|存放于|储存在|储存于|保存在|放到了|放在|放到|放进|搁在|摆在|置于|收在|收进|(?:存放位置|位置|地点)[:：是为在]+|放|搁|在)(?:了)?\\s*"
-        return Regex("$prefix([\\p{IsHan}A-Za-z0-9 _-]{1,40}?)(?=$ending)")
-            .findAll(text).mapNotNull { match ->
-                val place = match.groupValues[1].trim()
-                val vague = place in setOf("这", "那", "这儿", "那儿", "这里", "那里", "这边", "那边", "unk", "的")
-                val time = Regex("(?:$duration|今天|明天|后天|下周|下个月)(?:后|内|以后|之后)?").matches(place)
-                if (place.isBlank() || vague || time) null else SpokenLocation(place, match.value)
-            }.firstOrNull()
+        return com.example.foodmanager.core.SpokenLocation.find(text)?.let { SpokenLocation(it.place, it.expression) }
     }
 
     private fun normalizeSpokenLocation(place: String): String {

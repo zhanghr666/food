@@ -29,7 +29,7 @@ class InventoryViewModel(private val repository: FoodRepository) : ViewModel() {
     }
     fun quantity(item: FoodItem, value: Double) = perform { repository.setQuantity(item.id, value) }
     fun delete(item: FoodItem) = perform { repository.delete(item.id); runCatching { ExpiryReminderWorker.runNow(repository.appContext()) } }
-    fun addLocation(name: String) = perform { check(repository.addStorageLocation(name)) { "名称重复、为空或已达到 20 个位置" } }
+    fun addLocation(name: String) = perform { check(repository.addStorageLocation(name)) { "位置名称重复、为空或过长" } }
     fun removeLocation(id: Long) = perform { repository.removeStorageLocation(id) }
     fun alias(id: Long, value: String) = perform { repository.updateStorageLocationAlias(id, value) }
     fun foodAlias(id: Long, value: String) = perform { repository.updateCommonFoodAlias(id, value) }

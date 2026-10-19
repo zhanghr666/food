@@ -13,19 +13,19 @@ import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
-interface FoodDao {
+abstract class FoodDao {
 
     @Query("SELECT * FROM food_items WHERE archived = 0 ORDER BY (expiryDate IS NULL), expiryDate ASC, name ASC")
-    fun observeAll(): Flow<List<FoodItem>>
+    abstract fun observeAll(): Flow<List<FoodItem>>
 
     @Query("SELECT * FROM food_items WHERE archived = 1 ORDER BY updatedAt DESC")
-    fun observeArchived(): Flow<List<FoodItem>>
+    abstract fun observeArchived(): Flow<List<FoodItem>>
 
     @Query("SELECT * FROM food_items WHERE id = :id LIMIT 1")
-    suspend fun findById(id: Long): FoodItem?
+    abstract suspend fun findById(id: Long): FoodItem?
 
     @Query("SELECT * FROM food_items WHERE id = :id LIMIT 1")
-    fun observeById(id: Long): Flow<FoodItem?>
+    abstract fun observeById(id: Long): Flow<FoodItem?>
 
     @Query(
         """
@@ -39,59 +39,85 @@ interface FoodDao {
         ORDER BY (expiryDate IS NULL), expiryDate ASC, name ASC
         """
     )
-    fun observeFiltered(query: String, location: String): Flow<List<FoodItem>>
+    abstract fun observeFiltered(query: String, location: String): Flow<List<FoodItem>>
 
     @Query("SELECT * FROM food_items WHERE archived = 0")
-    suspend fun allActive(): List<FoodItem>
+    abstract suspend fun allActive(): List<FoodItem>
 
     @Query("SELECT * FROM food_items WHERE archived = 0 AND expiryDate IS NOT NULL AND expiryDate <= :until ORDER BY expiryDate ASC")
-    suspend fun expiringBy(until: Long): List<FoodItem>
+    abstract suspend fun expiringBy(until: Long): List<FoodItem>
 
     @Query("SELECT * FROM food_items WHERE archived = 0 AND expiryDate IS NOT NULL AND expiryDate < :today ORDER BY expiryDate ASC")
-    suspend fun expiredBefore(today: Long): List<FoodItem>
+    abstract suspend fun expiredBefore(today: Long): List<FoodItem>
 
     @Query("SELECT COUNT(*) FROM food_items WHERE archived = 0")
-    fun observeActiveCount(): Flow<Int>
+    abstract fun observeActiveCount(): Flow<Int>
 
     /** 全部记录数（含已归档）：用于判断"用户是否已经用过这个 App" */
     @Query("SELECT COUNT(*) FROM food_items")
-    suspend fun countAll(): Int
+    abstract suspend fun countAll(): Int
 
     @Query("SELECT DISTINCT location FROM food_items WHERE archived = 0 AND location != '' ORDER BY location")
-    fun observeLocations(): Flow<List<String>>
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insert(item: FoodItem): Long
-
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun insertAll(items: List<FoodItem>): List<Long>
+    abstract fun observeLocations(): Flow<List<String>>
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
-    suspend fun insertDraftBatchOnce(items: List<FoodItem>): List<Long>
+    abstract suspend fun insertRoot(item: ManagedItem): Long
+    @Update abstract suspend fun updateRoot(item: ManagedItem): Int
+    @Upsert abstract suspend fun putDetails(details: FoodDetails)
+    @Query("SELECT * FROM item_reminders WHERE itemId = :id") abstract suspend fun reminder(id: Long): ItemReminder?
+    @Upsert abstract suspend fun putReminder(value: ItemReminder)
+    @Query("DELETE FROM item_reminders WHERE itemId = :id") abstract suspend fun removeReminder(id: Long)
+    private suspend fun syncReminder(item: FoodItem, id: Long) {
+        val date = item.expiryDate
+        if (date == null) { removeReminder(id); return }
+        val kind = if (item.dateKind == "reminder") "plan" else "expiry"
+        val previous = reminder(id)
+        if (previous != null && previous.targetDate == date && previous.kind == kind) return
+        putReminder(ItemReminder(id, kind, if (kind == "plan") "计划食用" else "食品到期", date, if (kind == "plan") 0 else -1))
+    }
 
-    @Update
-    suspend fun update(item: FoodItem): Int
+    @Query("SELECT id FROM managed_items WHERE entryToken = :token") abstract suspend fun tokenId(token: String): Long?
 
-    @Upsert
-    suspend fun upsert(item: FoodItem): Long
+    @androidx.room.Transaction
+    open suspend fun insert(item: FoodItem): Long {
+        if (item.id != 0L && findById(item.id) != null) { update(item); return item.id }
+        val id = insertRoot(item.common())
+        if (id > 0) { putDetails(item.details(id)); syncReminder(item, id) }
+        return id
+    }
+    @androidx.room.Transaction
+    open suspend fun insertAll(items: List<FoodItem>): List<Long> = items.map { insert(it) }
+    @androidx.room.Transaction
+    open suspend fun insertDraftBatchOnce(items: List<FoodItem>): List<Long> = items.map { item ->
+        val id = insertRoot(item.common())
+        if (id > 0) { putDetails(item.details(id)); syncReminder(item, id) }
+        id
+    }
+    @androidx.room.Transaction
+    open suspend fun update(item: FoodItem): Int {
+        if (findById(item.id) == null) return 0
+        val affected = updateRoot(item.common())
+        if (affected == 1) { putDetails(item.details()); syncReminder(item, item.id) }
+        return affected
+    }
+    @androidx.room.Transaction
+    open suspend fun upsert(item: FoodItem): Long = if (item.id != 0L && findById(item.id) != null) { update(item); item.id } else insert(item)
+    open suspend fun delete(item: FoodItem) { deleteById(item.id) }
 
-    @Delete
-    suspend fun delete(item: FoodItem)
+    @Query("DELETE FROM managed_items WHERE kind = 'food' AND id = :id")
+    abstract suspend fun deleteById(id: Long)
 
-    @Query("DELETE FROM food_items WHERE id = :id")
-    suspend fun deleteById(id: Long)
+    @Query("UPDATE managed_items SET archived = :archived, updatedAt = :updatedAt WHERE kind = 'food' AND id = :id")
+    abstract suspend fun setArchived(id: Long, archived: Boolean, updatedAt: Long = System.currentTimeMillis()): Int
 
-    @Query("UPDATE food_items SET archived = :archived, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun setArchived(id: Long, archived: Boolean, updatedAt: Long = System.currentTimeMillis()): Int
+    @Query("UPDATE managed_items SET quantity = :quantity, quantitySpecified = :specified, updatedAt = :updatedAt WHERE kind = 'food' AND id = :id")
+    abstract suspend fun updateQuantity(id: Long, quantity: Double, specified: Boolean = true, updatedAt: Long = System.currentTimeMillis()): Int
 
-    @Query("UPDATE food_items SET quantity = :quantity, quantitySpecified = :specified, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun updateQuantity(id: Long, quantity: Double, specified: Boolean = true, updatedAt: Long = System.currentTimeMillis()): Int
+    @Query("UPDATE managed_items SET quantity = MAX(0, quantity + :delta), quantitySpecified = 1, updatedAt = :updatedAt WHERE kind = 'food' AND id = :id")
+    abstract suspend fun incrementQuantity(id: Long, delta: Double, updatedAt: Long = System.currentTimeMillis())
 
-    @Query("UPDATE food_items SET quantity = MAX(0, quantity + :delta), quantitySpecified = 1, updatedAt = :updatedAt WHERE id = :id")
-    suspend fun incrementQuantity(id: Long, delta: Double, updatedAt: Long = System.currentTimeMillis())
-
-    @Query("DELETE FROM food_items")
-    suspend fun clearAll()
+    @Query("DELETE FROM managed_items WHERE kind = 'food'")
+    abstract suspend fun clearAll()
 }
 
 /** 应用设置，单行表（id 恒为 1） */
@@ -184,7 +210,7 @@ interface StorageLocationDao {
     suspend fun deleteById(id: Long)
 
     /** 有多少条**在库**记录正在使用这个位置（用于删除前提示） */
-    @Query("SELECT COUNT(*) FROM food_items WHERE location = :name")
+    @Query("SELECT COUNT(*) FROM managed_items WHERE location = :name")
     suspend fun usageCount(name: String): Int
 }
 

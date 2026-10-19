@@ -141,7 +141,6 @@ class FoodRepository(
     /** 新增位置（去重、限长、限总量），返回是否真的加进去了 */
     suspend fun addStorageLocation(name: String): Boolean {
         val clean = name.sanitizeName() ?: return false
-        if (storageLocationDao.count() >= MAX_CUSTOM_ITEMS) return false
         val next = storageLocationDao.getAll().size
         val id = storageLocationDao.insertIgnore(
             StorageLocation(name = clean, sortOrder = next),

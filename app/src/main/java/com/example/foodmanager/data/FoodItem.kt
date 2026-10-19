@@ -1,7 +1,6 @@
 package com.example.foodmanager.data
 
-import androidx.room.Entity
-import androidx.room.PrimaryKey
+import androidx.room.DatabaseView
 import com.example.foodmanager.core.DateUtils
 import java.util.concurrent.TimeUnit
 
@@ -9,9 +8,8 @@ import java.util.concurrent.TimeUnit
  * 食物记录。数量统一用 Double 存储，单位单独保存，便于统计与排序。
  * 所有时间字段均为「当地时区当日 0 点」对应的 epoch 毫秒，方便直接做天数差计算。
  */
-@Entity(tableName = "food_items", indices = [androidx.room.Index(value = ["entryToken"], unique = true)])
+@DatabaseView(value = FOOD_VIEW, viewName = "food_items")
 data class FoodItem(
-    @PrimaryKey(autoGenerate = true)
     val id: Long = 0L,
     /** 同一草稿恢复后重试保存，不会再次入库。旧辅助调用可以不提供。 */
     val entryToken: String? = null,
@@ -26,7 +24,6 @@ data class FoodItem(
     val quantity: Double = 1.0,
 
     /** 区分未填写与明确填写的零；历史零数量迁移为未填写。 */
-    @androidx.room.ColumnInfo(defaultValue = "0")
     val quantitySpecified: Boolean = quantity > 0,
 
     /** 单位，如：瓶、盒、袋、个、克 */

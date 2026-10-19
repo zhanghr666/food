@@ -11,10 +11,14 @@
         <exclude domain="device_database" path="." />
         <exclude domain="device_sharedpref" path="." />
     </cloud-backup>
-    <!-- 仅允许系统设备间迁移食物数据库；不传图片、模型和后台任务库。 -->
+    <!-- 仅允许系统设备间迁移库存及现场照片；模型和后台任务库不迁移。 -->
     <device-transfer>
         <include domain="database" path="food_manager.db" />
         <include domain="database" path="food_manager.db-wal" />
         <include domain="database" path="food_manager.db-shm" />
+        <include domain="database" path="food_manager_next.db" />
+        <include domain="database" path="food_manager_next.db-wal" />
+        <include domain="database" path="food_manager_next.db-shm" />
+        <include domain="file" path="item_photos/" />
     </device-transfer>
 </data-extraction-rules>

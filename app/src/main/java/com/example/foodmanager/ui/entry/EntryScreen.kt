@@ -7,8 +7,11 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.relocation.BringIntoViewRequester
+import androidx.compose.foundation.relocation.bringIntoViewRequester
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
@@ -36,7 +39,7 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun EntryScreen(vm: EntryViewModel) {
+fun EntryScreen(vm: EntryViewModel, focusPhotos: Boolean = false, onBack: (() -> Unit)? = null) {
     val state by vm.state.collectAsState()
     val locations by vm.locations.collectAsState()
     val foods by vm.foods.collectAsState()
@@ -52,6 +55,8 @@ fun EntryScreen(vm: EntryViewModel) {
     var candidateDate by remember { mutableStateOf<Long?>(null) }
     var clearConfirm by remember { mutableStateOf(false) }
     val enabled = !state.saving && !state.busy && !state.recording
+    val photoFocus = remember { BringIntoViewRequester() }
+    LaunchedEffect(focusPhotos, draft.itemId) { if (focusPhotos) { withFrameNanos { }; photoFocus.bringIntoView() } }
     LaunchedEffect(Unit) { withContext(Dispatchers.IO) { CameraFiles.cleanUpStale(context) } }
     val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) vm.message("麦克风已允许，请重新按住说话") else vm.message("麦克风权限未开启，可以继续使用文字或拍照录入")
@@ -86,7 +91,8 @@ fun EntryScreen(vm: EntryViewModel) {
     Column(Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
-                Text(if (draft.itemId != 0L) "编辑食物" else "录入食物", style = MaterialTheme.typography.titleLarge)
+                if (onBack != null) IconButton(onBack, enabled = !state.saving && (!state.busy || state.recording)) { Icon(Icons.AutoMirrored.Outlined.ArrowBack, "返回食物") }
+                Text(if (draft.itemId != 0L) "编辑食物" else "录入食物", style = MaterialTheme.typography.titleLarge, modifier = Modifier.weight(1f))
             }
             if (draft.itemId == 0L) {
                 FoodSegments(listOf("voice" to "语音", "photo" to "拍照", "text" to "文字", "manual" to "手动"), state.mode, vm::setMode, enabled = enabled)
@@ -152,6 +158,7 @@ fun EntryScreen(vm: EntryViewModel) {
                 }
             }
             if (state.message.isNotBlank()) Text(state.message, color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodyMedium)
+            if (!draft.photosLoaded && !state.busy) TextButton(vm::retryPhotos) { Text("重试照片加载") }
             if (state.busy || state.saving || state.preparing) LinearProgressIndicator(Modifier.fillMaxWidth())
             if (state.drafts.size > 1) {
                 FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -229,6 +236,10 @@ fun EntryScreen(vm: EntryViewModel) {
                         EntryChoiceValue(draft.category, "选择分类", !state.saving, { sheet = "category" }, Modifier.testTag("entry-category"))
                     }
                     FieldCandidates(draft, EntryField.CATEGORY, !state.saving, vm::confirmCandidate)
+                    Box(Modifier.bringIntoViewRequester(photoFocus)) {
+                        com.example.foodmanager.ui.components.ItemPhotosEditor(draft.photos, com.example.foodmanager.FoodApp.from(context).items.photoStore, enabled,
+                            vm::addPhotos, vm::removePhoto, vm::coverPhoto, vm::movePhoto, vm::message)
+                    }
                     draft.visibleWarnings.forEach { warning -> Text("· $warning", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.tertiary) }
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     Column(Modifier.fillMaxWidth().testTag("entry-actions"), verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -272,23 +283,19 @@ fun EntryScreen(vm: EntryViewModel) {
                 }
             }
     }
-    if (state.dirty || state.saving) {
+    if (onBack != null || state.dirty || state.saving) {
         Surface(color = MaterialTheme.colorScheme.surface, shadowElevation = 2.dp) {
             Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 if (state.validationMessage.isNotBlank()) Text(state.validationMessage, color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall, modifier = Modifier.fillMaxWidth().testTag("entry-validation-error"))
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text(if (state.saving) "正在保存…" else if (draft.itemId != 0L) "修改后请保存" else "尚未保存",
-                            style = MaterialTheme.typography.titleSmall, color = MaterialTheme.colorScheme.primary)
-                        Text(if (draft.completeCount < 6) "已填写 ${draft.completeCount}/6 · 请补齐" else "核对后点保存${if (draft.itemId == 0L) "入库" else "修改"}",
-                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Button(onClick = { focusManager.clearFocus(); vm.save(rememberFood) }, enabled = enabled, shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.widthIn(min = 148.dp).heightIn(min = 52.dp).testTag("entry-save")) {
+                    if (onBack != null) OutlinedButton(onBack, enabled = enabled, shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f).heightIn(min = 52.dp).testTag("entry-footer-cancel")) { Text("取消") }
+                    Button(onClick = { focusManager.clearFocus(); vm.save(rememberFood) }, enabled = enabled && vm.hasUnsavedChanges(), shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f).heightIn(min = 52.dp).testTag("entry-save")) {
                         Icon(Icons.Outlined.Save, contentDescription = null, modifier = Modifier.size(20.dp))
                         Spacer(Modifier.width(6.dp))
-                        Text(if (state.saving) "正在保存" else if (draft.itemId != 0L) "保存修改" else "保存${if (state.drafts.size > 1) " ${state.drafts.size} 件" else "入库"}")
+                        Text(if (state.saving) "正在保存" else "保存")
                     }
                 }
             }
@@ -334,7 +341,7 @@ fun EntryScreen(vm: EntryViewModel) {
     candidateDate?.let { date -> AlertDialog(onDismissRequest = { candidateDate = null }, title = { Text(DateUtils.format(date)) }, text = { Text("请根据包装确认这是哪一种日期") },
         confirmButton = { TextButton(onClick = { vm.date(date, "expiry"); candidateDate = null }) { Text("这是到期日") } },
         dismissButton = { TextButton(onClick = { vm.productionDate(date); candidateDate = null; sheet = "date" }) { Text("这是生产日") } }) }
-    if (clearConfirm) AlertDialog(onDismissRequest = { clearConfirm = false }, title = { Text(if (state.drafts.size > 1) "清空全部草稿？" else "清空本次录入？") }, text = { Text(if (state.drafts.size > 1) "所有尚未保存的内容会清空。只删除错误项，请使用“删除当前项”。" else "当前尚未保存的内容会清空。") },
+    if (clearConfirm) AlertDialog(onDismissRequest = { clearConfirm = false }, title = { Text(if (state.drafts.size > 1) "清空全部未保存内容？" else "清空本次录入？") }, text = { Text(if (state.drafts.size > 1) "所有尚未保存的内容会清空。只删除错误项，请使用“删除当前项”。" else "当前尚未保存的内容会清空。") },
         confirmButton = { TextButton(onClick = { focusManager.clearFocus(); vm.clear(); clearConfirm = false }, modifier = Modifier.testTag("entry-confirm-clear")) { Text("清空") } }, dismissButton = { TextButton(onClick = { clearConfirm = false }) { Text("继续填写") } })
 }
 

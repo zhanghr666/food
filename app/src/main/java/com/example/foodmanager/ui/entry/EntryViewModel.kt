@@ -1,8 +1,6 @@
 package com.example.foodmanager.ui.entry
 
 import android.net.Uri
-import android.os.Bundle
-import android.os.Build
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
@@ -30,7 +28,8 @@ data class EntryState(
     val validationMessage: String = "",
     val saveReview: EntrySaveReview? = null,
     val lastParsedInput: String? = null, val lastParsedKey: Long? = null,
-) : Serializable {
+) : PhotoDraftSnapshot {
+    override val retainedPhotoKeys: List<String> get() = drafts.flatMap { it.photos }
     val current: EntryDraft get() = drafts[selected.coerceIn(0, drafts.lastIndex)]
     val dirty: Boolean get() = drafts.any { !it.isEmpty } || input.isNotBlank()
     val hasParsedInput: Boolean get() = lastParsedInput != null && lastParsedKey == current.key
@@ -39,7 +38,7 @@ data class EntryState(
     fun withoutCurrent(): EntryState {
         val remaining = drafts.filterIndexed { i, _ -> i != selected }.ifEmpty { listOf(EntryDraft()) }
         return copy(drafts = remaining, selected = selected.coerceAtMost(remaining.lastIndex), input = "",
-            validationMessage = "", saveReview = null, lastParsedInput = null, lastParsedKey = null, message = "已删除当前项，其他草稿已保留", saved = false)
+            validationMessage = "", saveReview = null, lastParsedInput = null, lastParsedKey = null, message = "已删除当前项，其他未保存内容已保留", saved = false)
     }
 
     /** 智能识别只能更新当前一件，其他草稿只能由用户主动添加。 */
@@ -54,29 +53,20 @@ data class EntryState(
 }
 
 class EntryViewModel(private val repository: FoodRepository, savedState: SavedStateHandle) : ViewModel() {
-    private val restored: EntryState? = savedState.get<Bundle>("entry")?.let { bundle ->
-        if (Build.VERSION.SDK_INT >= 33) bundle.getSerializable("snapshot", EntryState::class.java)
-        else {
-            @Suppress("DEPRECATION")
-            (bundle.getSerializable("snapshot") as? EntryState)
-        }
-    }
-    private val _state = MutableStateFlow(restored?.copy(busy = false, recording = false, preparing = false, saving = false, saved = false, saveReview = null,
-        message = when {
-            restored.saving -> "上次保存尚未确认，草稿已恢复；核对库存后可重试"
-            restored.busy || restored.recording || restored.preparing -> "上次识别已中断，草稿已恢复，可重新识别或补填"
-            else -> restored.message
-        }) ?: EntryState())
+    private val items = com.example.foodmanager.FoodApp.from(repository.appContext()).items
+    private val _state = MutableStateFlow(EntryState())
+    private var baseline: EntryDraft? = null
     val state = _state.asStateFlow()
     val locations = repository.storageLocations.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
     val foods = repository.commonFoods.stateIn(viewModelScope, SharingStarted.Eagerly, emptyList())
-    private val voice = VoiceRecognizer(repository.appContext())
+    private val voice = com.example.foodmanager.FoodApp.from(repository.appContext()).voice
     private var generation = 0
     private var voiceResultEnabled = false
     private var job: Job? = null
 
     init {
-        savedState.setSavedStateProvider("entry") { Bundle().apply { putSerializable("snapshot", _state.value) } }
+        if (_state.value.drafts.any { !it.photosLoaded }) retryPhotos()
+        viewModelScope.launch { _state.collect { snapshot -> items.retainEntryPhotos("food", snapshot.retainedPhotoKeys) } }
         viewModelScope.launch(start = CoroutineStart.UNDISPATCHED) {
             voice.state.collect { result ->
                 if (!voiceResultEnabled) return@collect
@@ -133,11 +123,73 @@ class EntryViewModel(private val repository: FoodRepository, savedState: SavedSt
         if (_state.value.saving || _state.value.busy || _state.value.recording) return
         _state.update(EntryState::withoutCurrent)
     }
+    fun hasUnsavedChanges(): Boolean {
+        val state = _state.value
+        val original = baseline ?: return state.input.isNotBlank() || state.drafts.any { it.hasNewContent() }
+        return state.input.isNotBlank() || state.drafts.size != 1 || !state.current.sameContent(original)
+    }
+    fun beginNew(): Boolean {
+        if (_state.value.saving || _state.value.busy) return false
+        clear(); _state.value = EntryState(); return true
+    }
+    fun syncRecord(id: Long, field: EntryField, value: String) {
+        if (_state.value.current.itemId == id) edit(field, value)
+    }
+    fun syncRecordDate(id: Long, value: Long) {
+        if (_state.value.current.itemId == id) date(value)
+    }
     fun clear() {
         if (_state.value.saving) return
-        generation++; job?.cancel(); voiceResultEnabled = false; voice.stop(); _state.value = EntryState(mode = _state.value.mode)
+        generation++; job?.cancel(); voiceResultEnabled = false; voice.stop()
+        baseline = null; _state.value = EntryState(mode = _state.value.mode)
+        items.retainEntryPhotos("food", emptyList())
     }
-    fun beginEdit(item: FoodItem) { clear(); _state.value = EntryState(drafts = listOf(EntryDraft.fromItem(item)), mode = "manual") }
+    fun beginEdit(item: FoodItem) {
+        if (_state.value.saving || _state.value.busy) return
+        clear()
+        val original = EntryDraft.fromItem(item).copy(photosLoaded = false)
+        baseline = original
+        _state.value = EntryState(drafts = listOf(original), mode = "manual")
+        retryPhotos()
+    }
+    fun retryPhotos() {
+        if (_state.value.saving || _state.value.busy || _state.value.recording) return
+        val pending = _state.value.drafts.filter { !it.photosLoaded }
+        if (pending.isEmpty()) return
+        val session = generation
+        _state.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            try {
+                for (draft in pending) {
+                    val keys = items.photos(draft.itemId)
+                    if (session == generation && baseline?.itemId == draft.itemId) baseline = baseline?.copy(photos = keys, photosLoaded = true)
+                    if (session == generation) _state.update { state -> state.copy(drafts = state.drafts.map { if (it.key == draft.key) it.copy(photos = keys, photosLoaded = true) else it }) }
+                }
+                if (session == generation) message("")
+            } catch (e: CancellationException) { throw e } catch (e: Exception) { if (session == generation) message("附件加载失败，请点重试；暂不能保存") }
+            finally { if (session == generation) _state.update { it.copy(busy = false) } }
+        }
+    }
+    fun addPhotos(uris: List<Uri>) {
+        if (_state.value.saving || _state.value.busy || _state.value.recording) return
+        val session = generation; val key = _state.value.current.key
+        _state.update { it.copy(busy = true) }
+        viewModelScope.launch {
+            var failures = 0
+            for (uri in uris) {
+                try { val photo = items.photoStore.import(uri)
+                    if (session == generation) _state.update { state -> state.copy(drafts = state.drafts.map { if (it.key == key) it.copy(photos = it.photos + photo) else it }) }
+                } catch (e: CancellationException) { throw e } catch (e: Exception) { failures++ }
+            }
+            if (session == generation) _state.update { it.copy(busy = false, message = if (failures > 0) "$failures 张照片未能导入，其他照片已保留" else "现场照片已添加，不参与识别") }
+        }
+    }
+    fun removePhoto(key: String) = change { it.copy(photos = it.photos - key) }
+    fun coverPhoto(key: String) = change { it.copy(photos = listOf(key) + (it.photos - key)) }
+    fun movePhoto(key: String, offset: Int) = change { draft ->
+        val index = draft.photos.indexOf(key); val target = index + offset
+        if (index < 0 || target !in draft.photos.indices) draft else draft.copy(photos = draft.photos.toMutableList().apply { java.util.Collections.swap(this, index, target) })
+    }
     fun useTemplate(food: CommonFood) {
         change { current -> if (current.isEmpty) SmartTextParser.template(food) else current.merge(SmartTextParser.template(food)) }
     }
@@ -201,6 +253,7 @@ class EntryViewModel(private val repository: FoodRepository, savedState: SavedSt
     fun save(remember: Boolean) {
         val state = _state.value
         if (state.saving || state.busy || state.recording || state.saved) return
+        if (state.drafts.any { !it.photosLoaded }) { message("附件未能加载，请重新打开编辑后保存"); return }
         val active = state.drafts.filter { !it.isEmpty }
         val invalidIndex = state.drafts.indexOfFirst { !it.isEmpty && it.validationError(requireConfirmation = false) != null }
         val error = state.drafts.getOrNull(invalidIndex)?.validationError(requireConfirmation = false)
@@ -216,16 +269,16 @@ class EntryViewModel(private val repository: FoodRepository, savedState: SavedSt
         viewModelScope.launch {
             try {
                 val items = active.map(EntryDraft::toItem)
-                if (items.any { it.id != 0L }) {
-                    require(items.size == 1) { "编辑时请一次保存一件食物" }
-                    val original = repository.get(items.first().id) ?: error("这件食物已经删除")
-                    repository.update(items.first().copy(createdAt = original.createdAt, archived = original.archived))
-                } else repository.saveDraftBatchOnce(items)
+                if (items.any { it.id != 0L }) require(items.size == 1) { "编辑时请一次保存一件食物" }
+                this@EntryViewModel.items.saveFoods(items, active.map { it.photos })
                 // 库存已保存后，模板和提醒失败不得让用户重复写库。
                 if (remember) items.forEach { runCatching { repository.rememberFood(it) } }
                 runCatching { ExpiryReminderWorker.runNow(repository.appContext()) }
                 generation++
-                _state.value = EntryState(mode = state.mode, message = "已保存 ${items.size} 件食物", saved = true)
+                val empty = EntryState(mode = state.mode)
+                _state.value = empty.copy(saving = true)
+                baseline = null; this@EntryViewModel.items.retainEntryPhotos("food", emptyList())
+                _state.value = empty.copy(message = "已保存 ${items.size} 件食物", saved = true)
             } catch (e: CancellationException) { throw e }
             catch (e: Exception) { _state.update { it.copy(saving = false, message = "保存失败，内容已保留：${e.message.orEmpty()}") } }
         }
@@ -243,7 +296,7 @@ class EntryViewModel(private val repository: FoodRepository, savedState: SavedSt
         save(review.rememberFood)
     }
     fun consumeSaved() { _state.update { it.copy(saved = false, message = "") } }
-    override fun onCleared() { voice.releaseModel() }
+    override fun onCleared() { items.retainEntryPhotos("food", emptyList()); voice.releaseModel() }
     companion object {
         fun factory(repository: FoodRepository): ViewModelProvider.Factory = viewModelFactory {
             initializer { EntryViewModel(repository, createSavedStateHandle()) }

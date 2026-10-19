@@ -2,16 +2,27 @@
   "formatVersion": 1,
   "database": {
     "version": 3,
-    "identityHash": "26b20250c601e9e57256e6a0025b6bd1",
+    "identityHash": "c48892a0e3f239cfa2071c92063199dd",
     "entities": [
       {
-        "tableName": "food_items",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `category` TEXT NOT NULL, `quantity` REAL NOT NULL, `unit` TEXT NOT NULL, `purchaseDate` INTEGER NOT NULL, `productionDate` INTEGER, `expiryDate` INTEGER, `location` TEXT NOT NULL, `note` TEXT NOT NULL, `source` TEXT NOT NULL, `archived` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL)",
+        "tableName": "managed_items",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `entryToken` TEXT, `kind` TEXT NOT NULL, `name` TEXT NOT NULL, `category` TEXT NOT NULL, `quantity` REAL NOT NULL, `quantitySpecified` INTEGER NOT NULL DEFAULT 0, `unit` TEXT NOT NULL, `purchaseDate` INTEGER NOT NULL, `location` TEXT NOT NULL, `note` TEXT NOT NULL, `brand` TEXT NOT NULL, `specification` TEXT NOT NULL, `price` REAL, `source` TEXT NOT NULL, `archived` INTEGER NOT NULL, `createdAt` INTEGER NOT NULL, `updatedAt` INTEGER NOT NULL)",
         "fields": [
           {
             "fieldPath": "id",
             "columnName": "id",
             "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "entryToken",
+            "columnName": "entryToken",
+            "affinity": "TEXT"
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
             "notNull": true
           },
           {
@@ -33,6 +44,13 @@
             "notNull": true
           },
           {
+            "fieldPath": "quantitySpecified",
+            "columnName": "quantitySpecified",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
             "fieldPath": "unit",
             "columnName": "unit",
             "affinity": "TEXT",
@@ -45,16 +63,6 @@
             "notNull": true
           },
           {
-            "fieldPath": "productionDate",
-            "columnName": "productionDate",
-            "affinity": "INTEGER"
-          },
-          {
-            "fieldPath": "expiryDate",
-            "columnName": "expiryDate",
-            "affinity": "INTEGER"
-          },
-          {
             "fieldPath": "location",
             "columnName": "location",
             "affinity": "TEXT",
@@ -65,6 +73,23 @@
             "columnName": "note",
             "affinity": "TEXT",
             "notNull": true
+          },
+          {
+            "fieldPath": "brand",
+            "columnName": "brand",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "specification",
+            "columnName": "specification",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "price",
+            "columnName": "price",
+            "affinity": "REAL"
           },
           {
             "fieldPath": "source",
@@ -96,11 +121,144 @@
           "columnNames": [
             "id"
           ]
-        }
+        },
+        "indices": [
+          {
+            "name": "index_managed_items_entryToken",
+            "unique": true,
+            "columnNames": [
+              "entryToken"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_managed_items_entryToken` ON `${TABLE_NAME}` (`entryToken`)"
+          },
+          {
+            "name": "index_managed_items_kind_archived",
+            "unique": false,
+            "columnNames": [
+              "kind",
+              "archived"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_managed_items_kind_archived` ON `${TABLE_NAME}` (`kind`, `archived`)"
+          }
+        ]
+      },
+      {
+        "tableName": "food_details",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`itemId` INTEGER NOT NULL, `productionDate` INTEGER, `expiryDate` INTEGER, `dateKind` TEXT NOT NULL, `shelfLifeAmount` INTEGER, `shelfLifeUnit` TEXT NOT NULL, PRIMARY KEY(`itemId`), FOREIGN KEY(`itemId`) REFERENCES `managed_items`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "productionDate",
+            "columnName": "productionDate",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "expiryDate",
+            "columnName": "expiryDate",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "dateKind",
+            "columnName": "dateKind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "shelfLifeAmount",
+            "columnName": "shelfLifeAmount",
+            "affinity": "INTEGER"
+          },
+          {
+            "fieldPath": "shelfLifeUnit",
+            "columnName": "shelfLifeUnit",
+            "affinity": "TEXT",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "itemId"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "managed_items",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "itemId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      },
+      {
+        "tableName": "photo_attachments",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`key` TEXT NOT NULL, `itemId` INTEGER NOT NULL, `position` INTEGER NOT NULL, PRIMARY KEY(`key`), FOREIGN KEY(`itemId`) REFERENCES `managed_items`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "key",
+            "columnName": "key",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "position",
+            "columnName": "position",
+            "affinity": "INTEGER",
+            "notNull": true
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "key"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_photo_attachments_itemId",
+            "unique": false,
+            "columnNames": [
+              "itemId"
+            ],
+            "orders": [],
+            "createSql": "CREATE INDEX IF NOT EXISTS `index_photo_attachments_itemId` ON `${TABLE_NAME}` (`itemId`)"
+          }
+        ],
+        "foreignKeys": [
+          {
+            "table": "managed_items",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "itemId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
       },
       {
         "tableName": "app_settings",
-        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `warnDays` INTEGER NOT NULL DEFAULT 3, `notifyEnabled` INTEGER NOT NULL DEFAULT 1, `homeBannerEnabled` INTEGER NOT NULL DEFAULT 1, `notifyHour` INTEGER NOT NULL DEFAULT 9, `reuseLastLocation` INTEGER NOT NULL DEFAULT 1, `ocrSingleItem` INTEGER NOT NULL DEFAULT 1, `lastLocation` TEXT NOT NULL DEFAULT '', `lastUnit` TEXT NOT NULL DEFAULT '个', `customLocations` TEXT NOT NULL DEFAULT '', `customFoods` TEXT NOT NULL DEFAULT '', `lastEntryMode` TEXT NOT NULL DEFAULT 'manual', PRIMARY KEY(`id`))",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER NOT NULL, `warnDays` INTEGER NOT NULL DEFAULT 3, `notifyEnabled` INTEGER NOT NULL DEFAULT 1, `homeBannerEnabled` INTEGER NOT NULL DEFAULT 1, `notifyHour` INTEGER NOT NULL DEFAULT 9, `ocrSingleItem` INTEGER NOT NULL DEFAULT 1, `lastLocation` TEXT NOT NULL DEFAULT '', `lastUnit` TEXT NOT NULL DEFAULT '个', `lastEntryMode` TEXT NOT NULL DEFAULT 'manual', `locationsInitialized` INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(`id`))",
         "fields": [
           {
             "fieldPath": "id",
@@ -137,13 +295,6 @@
             "defaultValue": "9"
           },
           {
-            "fieldPath": "reuseLastLocation",
-            "columnName": "reuseLastLocation",
-            "affinity": "INTEGER",
-            "notNull": true,
-            "defaultValue": "1"
-          },
-          {
             "fieldPath": "ocrSingleItem",
             "columnName": "ocrSingleItem",
             "affinity": "INTEGER",
@@ -165,25 +316,18 @@
             "defaultValue": "'个'"
           },
           {
-            "fieldPath": "customLocations",
-            "columnName": "customLocations",
-            "affinity": "TEXT",
-            "notNull": true,
-            "defaultValue": "''"
-          },
-          {
-            "fieldPath": "customFoods",
-            "columnName": "customFoods",
-            "affinity": "TEXT",
-            "notNull": true,
-            "defaultValue": "''"
-          },
-          {
             "fieldPath": "lastEntryMode",
             "columnName": "lastEntryMode",
             "affinity": "TEXT",
             "notNull": true,
             "defaultValue": "'manual'"
+          },
+          {
+            "fieldPath": "locationsInitialized",
+            "columnName": "locationsInitialized",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
           }
         ],
         "primaryKey": {
@@ -192,11 +336,213 @@
             "id"
           ]
         }
+      },
+      {
+        "tableName": "storage_locations",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `alias` TEXT NOT NULL DEFAULT '', `sortOrder` INTEGER NOT NULL DEFAULT 0, `createdAt` INTEGER NOT NULL DEFAULT 0)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "alias",
+            "columnName": "alias",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "sortOrder",
+            "columnName": "sortOrder",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_storage_locations_name",
+            "unique": true,
+            "columnNames": [
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_storage_locations_name` ON `${TABLE_NAME}` (`name`)"
+          }
+        ]
+      },
+      {
+        "tableName": "common_foods",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`id` INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, `name` TEXT NOT NULL, `category` TEXT NOT NULL, `unit` TEXT NOT NULL, `location` TEXT NOT NULL, `alias` TEXT NOT NULL DEFAULT '', `sortOrder` INTEGER NOT NULL DEFAULT 0, `createdAt` INTEGER NOT NULL DEFAULT 0)",
+        "fields": [
+          {
+            "fieldPath": "id",
+            "columnName": "id",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "name",
+            "columnName": "name",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "category",
+            "columnName": "category",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "unit",
+            "columnName": "unit",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "location",
+            "columnName": "location",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "alias",
+            "columnName": "alias",
+            "affinity": "TEXT",
+            "notNull": true,
+            "defaultValue": "''"
+          },
+          {
+            "fieldPath": "sortOrder",
+            "columnName": "sortOrder",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          },
+          {
+            "fieldPath": "createdAt",
+            "columnName": "createdAt",
+            "affinity": "INTEGER",
+            "notNull": true,
+            "defaultValue": "0"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": true,
+          "columnNames": [
+            "id"
+          ]
+        },
+        "indices": [
+          {
+            "name": "index_common_foods_name",
+            "unique": true,
+            "columnNames": [
+              "name"
+            ],
+            "orders": [],
+            "createSql": "CREATE UNIQUE INDEX IF NOT EXISTS `index_common_foods_name` ON `${TABLE_NAME}` (`name`)"
+          }
+        ]
+      },
+      {
+        "tableName": "item_reminders",
+        "createSql": "CREATE TABLE IF NOT EXISTS `${TABLE_NAME}` (`itemId` INTEGER NOT NULL, `kind` TEXT NOT NULL, `title` TEXT NOT NULL, `targetDate` INTEGER NOT NULL, `leadDays` INTEGER NOT NULL, `completed` INTEGER NOT NULL, `snoozedUntil` INTEGER, PRIMARY KEY(`itemId`), FOREIGN KEY(`itemId`) REFERENCES `managed_items`(`id`) ON UPDATE NO ACTION ON DELETE CASCADE )",
+        "fields": [
+          {
+            "fieldPath": "itemId",
+            "columnName": "itemId",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "kind",
+            "columnName": "kind",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "title",
+            "columnName": "title",
+            "affinity": "TEXT",
+            "notNull": true
+          },
+          {
+            "fieldPath": "targetDate",
+            "columnName": "targetDate",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "leadDays",
+            "columnName": "leadDays",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "completed",
+            "columnName": "completed",
+            "affinity": "INTEGER",
+            "notNull": true
+          },
+          {
+            "fieldPath": "snoozedUntil",
+            "columnName": "snoozedUntil",
+            "affinity": "INTEGER"
+          }
+        ],
+        "primaryKey": {
+          "autoGenerate": false,
+          "columnNames": [
+            "itemId"
+          ]
+        },
+        "foreignKeys": [
+          {
+            "table": "managed_items",
+            "onDelete": "CASCADE",
+            "onUpdate": "NO ACTION",
+            "columns": [
+              "itemId"
+            ],
+            "referencedColumns": [
+              "id"
+            ]
+          }
+        ]
+      }
+    ],
+    "views": [
+      {
+        "viewName": "food_items",
+        "createSql": "CREATE VIEW `${VIEW_NAME}` AS SELECT m.id, m.entryToken, m.name, m.category, m.quantity, m.quantitySpecified, m.unit, m.purchaseDate, f.productionDate, f.expiryDate, f.dateKind, f.shelfLifeAmount, f.shelfLifeUnit, m.location, m.note, m.brand, m.specification, m.price, m.source, m.archived, m.createdAt, m.updatedAt FROM managed_items AS m INNER JOIN food_details AS f ON m.id = f.itemId WHERE m.kind = 'food'"
       }
     ],
     "setupQueries": [
       "CREATE TABLE IF NOT EXISTS room_master_table (id INTEGER PRIMARY KEY,identity_hash TEXT)",
-      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, '26b20250c601e9e57256e6a0025b6bd1')"
+      "INSERT OR REPLACE INTO room_master_table (id,identity_hash) VALUES(42, 'c48892a0e3f239cfa2071c92063199dd')"
     ]
   }
 }
